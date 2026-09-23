@@ -6,10 +6,12 @@ a C adapter integrates wlroots. A Qt Quick desktop shell is planned.
 
 This is an early development project, not a replacement desktop session yet.
 
-## First checkpoint: configuration
+## Verified foundation
 
 Implemented: a versioned Lua configuration loader, strict setting validation,
-keyboard binding matching, and transactional configuration loading. Lua can use
+keyboard binding matching, transactional configuration loading, and C++ window
+placement for snapping and grid tiling. Placement tests cover non-overlap, output
+bounds, gaps, and very small outputs. Lua can use
 base functions, tables, strings, math, and UTF-8 to compute settings. Process and
 file I/O libraries are not exposed. Commands use argument arrays, not shell
 strings. Configuration is user-controlled code; the evaluator is not a security
@@ -25,7 +27,7 @@ ctest --test-dir build --output-on-failure
 
 See [config/init.lua](config/init.lua) for the planned initial compositor
 settings and bindings. At this checkpoint they can be parsed and validated;
-the compositor executable is the next checkpoint.
+the compositor executable is being developed as the next checkpoint.
 
 ## Development sequence
 

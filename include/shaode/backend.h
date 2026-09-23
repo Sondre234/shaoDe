@@ -45,6 +45,12 @@ struct sh_callbacks {
 
 int sh_run(const struct sh_callbacks *callbacks, bool headless);
 
+struct sh_rect {
+    int x, y, width, height;
+};
+bool sh_placement(enum sh_action action, struct sh_rect area, int gap, int index, int count,
+                  struct sh_rect *result);
+
 #ifdef __cplusplus
 }
 #endif
