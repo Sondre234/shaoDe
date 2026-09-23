@@ -38,6 +38,7 @@ int main(int argc, char **argv) {
         rejects("return {startup={{'kitty\\0bad'}}}");
         rejects("return {bindings={{mods={'Hyper'}, key='a', action='quit'}}}");
         rejects("return {bindings={{mods={}, key='NotAKey', action='quit'}}}");
+        rejects("return {bindings={{mods={}, key='a', action='unknown'}}}");
         rejects("local b={mods={'Alt'},key='a',action='quit'}; return {bindings={b,b}}");
         rejects("while true do end");
         rejects("os.execute('false')");
