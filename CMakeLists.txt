@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.25)
+project(shaoDe VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LUA REQUIRED IMPORTED_TARGET lua5.4)
+pkg_check_modules(XKB REQUIRED IMPORTED_TARGET xkbcommon)
+
+add_library(shaode_config src/config.cpp)
+target_include_directories(shaode_config PUBLIC include)
+target_link_libraries(shaode_config PRIVATE PkgConfig::LUA PUBLIC PkgConfig::XKB)
+target_compile_options(shaode_config PRIVATE -Wall -Wextra -Wpedantic)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(config_tests tests/config_tests.cpp)
+    target_link_libraries(config_tests PRIVATE shaode_config)
+    add_test(NAME config COMMAND config_tests ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+endif()
+
