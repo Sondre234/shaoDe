@@ -39,13 +39,36 @@ if(SHAODE_BUILD_COMPOSITOR)
     pkg_check_modules(PROTOCOLS REQUIRED wayland-protocols)
     pkg_get_variable(PROTOCOL_DIR wayland-protocols pkgdatadir)
     find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
+    set(WLR_PROTOCOL_HEADERS)
+    set(WLR_CLIENT_PROTOCOL_SOURCES)
+    foreach(PROTOCOL wlr-layer-shell-unstable-v1 wlr-foreign-toplevel-management-unstable-v1)
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-protocol.h
+            COMMAND ${WAYLAND_SCANNER} server-header
+            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${PROTOCOL}.xml
+            ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-protocol.h
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${PROTOCOL}.xml)
+        list(APPEND WLR_PROTOCOL_HEADERS ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-protocol.h)
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-client-protocol.h
+            COMMAND ${WAYLAND_SCANNER} client-header
+            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${PROTOCOL}.xml
+            ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-client-protocol.h
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${PROTOCOL}.xml)
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-protocol.c
+            COMMAND ${WAYLAND_SCANNER} private-code
+            ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${PROTOCOL}.xml
+            ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-protocol.c
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${PROTOCOL}.xml)
+        list(APPEND WLR_CLIENT_PROTOCOL_SOURCES
+            ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-client-protocol.h
+            ${CMAKE_CURRENT_BINARY_DIR}/${PROTOCOL}-protocol.c)
+    endforeach()
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h
         COMMAND ${WAYLAND_SCANNER} server-header
         ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml
         ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h
         DEPENDS ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml)
     add_executable(shaode src/main.cpp src/backend.c
-        ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h)
+        ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h ${WLR_PROTOCOL_HEADERS})
     target_include_directories(shaode PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_definitions(shaode PRIVATE WLR_USE_UNSTABLE)
     target_compile_definitions(shaode PRIVATE
@@ -58,6 +81,7 @@ if(SHAODE_BUILD_COMPOSITOR)
     install(FILES README.md docs/gentoo.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
     install(FILES vendor/tinywl/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/shaode
         RENAME TinyWL-LICENSE)
+    install(DIRECTORY protocols/ DESTINATION ${CMAKE_INSTALL_DATADIR}/shaode/protocols)
     if(SHAODE_INSTALL_SESSION)
         configure_file(packaging/shaode.desktop.in shaode.desktop @ONLY)
         install(FILES ${CMAKE_CURRENT_BINARY_DIR}/shaode.desktop
@@ -78,7 +102,7 @@ if(SHAODE_BUILD_COMPOSITOR)
             DEPENDS ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml)
         add_executable(wayland_probe tests/wayland_probe.c
             ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h
-            ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c)
+            ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c ${WLR_CLIENT_PROTOCOL_SOURCES})
         target_include_directories(wayland_probe PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
         target_link_libraries(wayland_probe PRIVATE PkgConfig::WAYLAND_CLIENT)
         target_compile_options(wayland_probe PRIVATE -Wall -Wextra -Wno-unused-parameter)

@@ -57,3 +57,11 @@ a development checkpoint for nested use, not a complete desktop session.
 
 Host input testing followed the
 [Hyprland dispatcher documentation](https://wiki.hypr.land/configuring/core/dispatchers/).
+
+## Shell protocol checkpoint
+
+The headless protocol probe now maps an actual layer-shell panel with a
+48-pixel exclusive zone and verifies that maximization leaves that area free.
+It also receives the window title through foreign-toplevel-management and
+exercises minimize, restore/activate, close, and handle removal after unmapping.
+The integration test repeats those operations across configuration reloads.

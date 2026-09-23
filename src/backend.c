@@ -21,8 +21,10 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
+#include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
@@ -46,11 +48,25 @@ enum sh_cursor_mode {
     SH_CURSOR_RESIZE,
 };
 
+enum sh_node_kind { SH_NODE_TOPLEVEL, SH_NODE_LAYER };
+struct sh_node {
+    enum sh_node_kind kind;
+    void *owner;
+};
+
 struct sh_server {
     const struct sh_callbacks *callbacks;
     bool running;
     uint32_t grab_button;
     struct wlr_scene_tree *backgrounds;
+    struct wlr_scene_tree *windows;
+    struct wlr_scene_tree *layer_trees[4];
+    struct wl_list layers;
+    struct wlr_layer_shell_v1 *layer_shell;
+    struct wl_listener new_layer_surface;
+    struct sh_layer *focused_layer;
+    struct sh_toplevel *focused_toplevel;
+    struct wlr_foreign_toplevel_manager_v1 *foreign_manager;
     struct wl_display *wl_display;
     struct wlr_backend *backend;
 #if WLR_HAS_SESSION
@@ -92,6 +108,7 @@ struct sh_server {
 };
 
 struct sh_output {
+    struct wlr_box usable;
     struct wlr_scene_rect *background;
     struct wl_list link;
     struct sh_server *server;
@@ -102,6 +119,13 @@ struct sh_output {
 };
 
 struct sh_toplevel {
+    struct sh_node node;
+    enum sh_action arrangement;
+    bool minimized;
+    struct wlr_foreign_toplevel_handle_v1 *foreign;
+    struct wl_listener title_changed, app_id_changed;
+    struct wl_listener foreign_activate, foreign_close, foreign_maximize, foreign_minimize;
+    struct wl_listener request_minimize;
     struct wlr_box restore_box;
     bool arranged;
     struct wl_list link;
@@ -116,6 +140,15 @@ struct sh_toplevel {
     struct wl_listener request_resize;
     struct wl_listener request_maximize;
     struct wl_listener request_fullscreen;
+};
+
+struct sh_layer {
+    struct sh_node node;
+    struct sh_server *server;
+    struct wlr_layer_surface_v1 *surface;
+    struct wlr_scene_layer_surface_v1 *scene;
+    struct wl_list link;
+    struct wl_listener commit, map, unmap, destroy, new_popup;
 };
 
 struct sh_popup {
@@ -135,36 +168,89 @@ struct sh_keyboard {
     struct wl_listener destroy;
 };
 
-static void focus_toplevel(struct sh_toplevel *toplevel) {
-    if (toplevel == NULL) {
+static void arrange_layers(struct sh_server *server);
+static void reflow_output(struct sh_server *server, struct wlr_output *output);
+static void create_popup(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent);
+
+static void deactivate_toplevel(struct sh_server *server) {
+    if (!server->focused_toplevel)
         return;
-    }
+    struct sh_toplevel *old = server->focused_toplevel;
+    wlr_xdg_toplevel_set_activated(old->xdg_toplevel, false);
+    if (old->foreign)
+        wlr_foreign_toplevel_handle_v1_set_activated(old->foreign, false);
+    server->focused_toplevel = NULL;
+}
+
+static void focus_toplevel(struct sh_toplevel *toplevel) {
+    if (!toplevel)
+        return;
     struct sh_server *server = toplevel->server;
     struct wlr_seat *seat = server->seat;
-    struct wlr_surface *prev_surface = seat->keyboard_state.focused_surface;
-    struct wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
-    if (prev_surface == surface) {
-        return;
-    }
-    if (prev_surface) {
-        struct wlr_xdg_toplevel *prev_toplevel =
-            wlr_xdg_toplevel_try_from_wlr_surface(prev_surface);
-        if (prev_toplevel != NULL) {
-            wlr_xdg_toplevel_set_activated(prev_toplevel, false);
-        }
-    }
-    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
-
+    deactivate_toplevel(server);
+    server->focused_layer = NULL;
+    server->focused_toplevel = toplevel;
+    toplevel->minimized = false;
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
     wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
     wl_list_remove(&toplevel->link);
     wl_list_insert(&server->toplevels, &toplevel->link);
-
     wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
-
-    if (keyboard != NULL) {
-        wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes,
-                                       &keyboard->modifiers);
+    if (toplevel->foreign) {
+        wlr_foreign_toplevel_handle_v1_set_minimized(toplevel->foreign, false);
+        wlr_foreign_toplevel_handle_v1_set_activated(toplevel->foreign, true);
     }
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+    if (keyboard)
+        wlr_seat_keyboard_notify_enter(seat, toplevel->xdg_toplevel->base->surface,
+                                       keyboard->keycodes, keyboard->num_keycodes,
+                                       &keyboard->modifiers);
+}
+
+static void focus_previous(struct sh_server *server) {
+    server->focused_layer = NULL;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (!toplevel->minimized) {
+            focus_toplevel(toplevel);
+            return;
+        }
+    }
+    deactivate_toplevel(server);
+    wlr_seat_keyboard_clear_focus(server->seat);
+}
+
+static void focus_layer(struct sh_layer *layer) {
+    if (layer->surface->current.keyboard_interactive ==
+        ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE)
+        return;
+    struct sh_server *server = layer->server;
+    deactivate_toplevel(server);
+    server->focused_layer = layer;
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
+    if (keyboard)
+        wlr_seat_keyboard_notify_enter(server->seat, layer->surface->surface, keyboard->keycodes,
+                                       keyboard->num_keycodes, &keyboard->modifiers);
+}
+
+static void minimize_toplevel(struct sh_toplevel *toplevel) {
+    toplevel->minimized = true;
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_minimized(toplevel->foreign, true);
+    if (toplevel->server->focused_toplevel == toplevel)
+        focus_previous(toplevel->server);
+}
+
+static void usable_area(struct sh_server *server, struct wlr_output *output, struct wlr_box *box) {
+    struct sh_output *candidate;
+    wl_list_for_each(candidate, &server->outputs, link) {
+        if (candidate->wlr_output == output) {
+            *box = candidate->usable;
+            return;
+        }
+    }
+    wlr_output_layout_get_box(server->output_layout, output, box);
 }
 
 static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) {
@@ -350,9 +436,8 @@ static void seat_request_set_selection(struct wl_listener *listener, void *data)
     wlr_seat_set_selection(server->seat, event->source, event->serial);
 }
 
-static struct sh_toplevel *desktop_toplevel_at(struct sh_server *server, double lx, double ly,
-                                               struct wlr_surface **surface, double *sx,
-                                               double *sy) {
+static struct sh_node *desktop_node_at(struct sh_server *server, double lx, double ly,
+                                       struct wlr_surface **surface, double *sx, double *sy) {
     struct wlr_scene_node *node = wlr_scene_node_at(&server->scene->tree.node, lx, ly, sx, sy);
     if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER) {
         return NULL;
@@ -370,6 +455,13 @@ static struct sh_toplevel *desktop_toplevel_at(struct sh_server *server, double 
         tree = tree->node.parent;
     }
     return tree ? tree->node.data : NULL;
+}
+
+static struct sh_toplevel *desktop_toplevel_at(struct sh_server *server, double x, double y,
+                                               struct wlr_surface **surface, double *sx,
+                                               double *sy) {
+    struct sh_node *node = desktop_node_at(server, x, y, surface, sx, sy);
+    return node && node->kind == SH_NODE_TOPLEVEL ? node->owner : NULL;
 }
 
 static void reset_cursor_mode(struct sh_server *server) {
@@ -436,9 +528,8 @@ static void process_cursor_motion(struct sh_server *server, uint32_t time) {
     double sx, sy;
     struct wlr_seat *seat = server->seat;
     struct wlr_surface *surface = NULL;
-    struct sh_toplevel *toplevel =
-        desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-    if (!toplevel) {
+    desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+    if (!surface) {
         wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
     }
     if (surface) {
@@ -476,9 +567,13 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
     if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
         double sx, sy;
         struct wlr_surface *surface = NULL;
-        struct sh_toplevel *toplevel =
-            desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-        focus_toplevel(toplevel);
+        struct sh_node *node =
+            desktop_node_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+        struct sh_toplevel *toplevel = node && node->kind == SH_NODE_TOPLEVEL ? node->owner : NULL;
+        if (toplevel)
+            focus_toplevel(toplevel);
+        else if (node && node->kind == SH_NODE_LAYER)
+            focus_layer(node->owner);
         struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
         uint32_t mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
         const struct sh_settings *settings =
@@ -550,8 +645,10 @@ static void reload_config(struct sh_server *server) {
 static void output_request_state(struct wl_listener *listener, void *data) {
     struct sh_output *output = wl_container_of(listener, output, request_state);
     const struct wlr_output_event_request_state *event = data;
-    if (wlr_output_commit_state(output->wlr_output, event->state))
+    if (wlr_output_commit_state(output->wlr_output, event->state)) {
         update_backgrounds(output->server);
+        arrange_layers(output->server);
+    }
 }
 
 static void output_destroy(struct wl_listener *listener, void *data) {
@@ -561,6 +658,11 @@ static void output_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&output->request_state.link);
     wl_list_remove(&output->destroy.link);
     wl_list_remove(&output->link);
+    struct sh_layer *layer, *temporary;
+    wl_list_for_each_safe(layer, temporary, &output->server->layers, link) {
+        if (layer->surface->output == output->wlr_output)
+            wlr_layer_surface_v1_destroy(layer->surface);
+    }
     wlr_scene_node_destroy(&output->background->node);
     if (output->server->running && wl_list_empty(&output->server->outputs))
         wl_display_terminate(output->server->wl_display);
@@ -610,6 +712,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     if (wlr_output_is_wl(wlr_output))
         wlr_wl_output_set_title(wlr_output, "shaoDe — nested desktop");
     update_backgrounds(server);
+    arrange_layers(server);
 }
 
 /* Preserve the original floating rectangle across repeated snap operations. */
@@ -622,6 +725,9 @@ static void place_toplevel(struct sh_toplevel *toplevel, enum sh_action action,
                              geometry->width, geometry->height};
     }
     toplevel->arranged = true;
+    toplevel->arrangement = action;
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, action == SH_MAXIMIZE);
     wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, action == SH_MAXIMIZE);
     wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, action == SH_MAXIMIZE
                                                            ? 0
@@ -635,6 +741,8 @@ static void restore_toplevel(struct sh_toplevel *toplevel) {
     if (!toplevel->arranged)
         return;
     toplevel->arranged = false;
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
     wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
     wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
     wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->restore_box.x,
@@ -666,7 +774,7 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     if (!output)
         return;
     struct wlr_box box;
-    wlr_output_layout_get_box(server->output_layout, output, &box);
+    usable_area(server, output, &box);
     struct sh_rect area = {box.x, box.y, box.width, box.height}, target;
     int gap = server->callbacks->settings(server->callbacks->userdata)->gap;
     if (action != SH_TILE) {
@@ -677,15 +785,231 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     int count = 0, index = 0;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel_output(toplevel) == output)
+        if (toplevel_output(toplevel) == output && !toplevel->minimized)
             ++count;
     }
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel_output(toplevel) != output)
+        if (toplevel_output(toplevel) != output || toplevel->minimized)
             continue;
         if (sh_placement(action, area, gap, index++, count, &target))
             place_toplevel(toplevel, action, target);
     }
+}
+
+static void reflow_output(struct sh_server *server, struct wlr_output *output) {
+    struct wlr_box box;
+    usable_area(server, output, &box);
+    struct sh_rect area = {box.x, box.y, box.width, box.height}, target;
+    int count = 0, index = 0;
+    int gap = server->callbacks->settings(server->callbacks->userdata)->gap;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel->arranged && !toplevel->minimized && toplevel_output(toplevel) == output &&
+            toplevel->arrangement == SH_TILE)
+            ++count;
+    }
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (!toplevel->arranged || toplevel->minimized || toplevel_output(toplevel) != output)
+            continue;
+        enum sh_action action = toplevel->arrangement;
+        if (sh_placement(action, area, gap, action == SH_TILE ? index++ : 0,
+                         action == SH_TILE ? count : 1, &target))
+            place_toplevel(toplevel, action, target);
+    }
+}
+
+static void foreign_activate(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_activate);
+    struct wlr_foreign_toplevel_handle_v1_activated_event *event = data;
+    if (event->seat == toplevel->server->seat)
+        focus_toplevel(toplevel);
+}
+static void foreign_close(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_close);
+    wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
+}
+static void foreign_maximize(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_maximize);
+    struct wlr_foreign_toplevel_handle_v1_maximized_event *event = data;
+    if (!event->maximized) {
+        restore_toplevel(toplevel);
+        return;
+    }
+    struct wlr_output *output = toplevel_output(toplevel);
+    if (!output)
+        return;
+    struct wlr_box box;
+    usable_area(toplevel->server, output, &box);
+    place_toplevel(toplevel, SH_MAXIMIZE, (struct sh_rect){box.x, box.y, box.width, box.height});
+}
+static void foreign_minimize(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_minimize);
+    struct wlr_foreign_toplevel_handle_v1_minimized_event *event = data;
+    if (event->minimized)
+        minimize_toplevel(toplevel);
+    else
+        focus_toplevel(toplevel);
+}
+static void toplevel_request_minimize(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_minimize);
+    if (toplevel->xdg_toplevel->base->surface->mapped)
+        minimize_toplevel(toplevel);
+}
+static void toplevel_title_changed(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, title_changed);
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_title(
+            toplevel->foreign,
+            toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "Untitled");
+}
+static void toplevel_app_id_changed(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, app_id_changed);
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_app_id(
+            toplevel->foreign,
+            toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "");
+}
+static void publish_toplevel(struct sh_toplevel *toplevel) {
+    toplevel->foreign = wlr_foreign_toplevel_handle_v1_create(toplevel->server->foreign_manager);
+    if (!toplevel->foreign)
+        return;
+    toplevel_title_changed(&toplevel->title_changed, NULL);
+    toplevel_app_id_changed(&toplevel->app_id_changed, NULL);
+    toplevel->foreign_activate.notify = foreign_activate;
+    wl_signal_add(&toplevel->foreign->events.request_activate, &toplevel->foreign_activate);
+    toplevel->foreign_close.notify = foreign_close;
+    wl_signal_add(&toplevel->foreign->events.request_close, &toplevel->foreign_close);
+    toplevel->foreign_maximize.notify = foreign_maximize;
+    wl_signal_add(&toplevel->foreign->events.request_maximize, &toplevel->foreign_maximize);
+    toplevel->foreign_minimize.notify = foreign_minimize;
+    wl_signal_add(&toplevel->foreign->events.request_minimize, &toplevel->foreign_minimize);
+    struct wlr_output *output = toplevel_output(toplevel);
+    if (output)
+        wlr_foreign_toplevel_handle_v1_output_enter(toplevel->foreign, output);
+}
+static void unpublish_toplevel(struct sh_toplevel *toplevel) {
+    if (!toplevel->foreign)
+        return;
+    wl_list_remove(&toplevel->foreign_activate.link);
+    wl_list_remove(&toplevel->foreign_close.link);
+    wl_list_remove(&toplevel->foreign_maximize.link);
+    wl_list_remove(&toplevel->foreign_minimize.link);
+    wlr_foreign_toplevel_handle_v1_destroy(toplevel->foreign);
+    toplevel->foreign = NULL;
+}
+
+/* Reserve exclusive panel regions before positioning nonexclusive layers. */
+static void arrange_layers(struct sh_server *server) {
+    struct sh_output *output;
+    struct sh_layer *exclusive = NULL;
+    wl_list_for_each(output, &server->outputs, link) {
+        struct wlr_box full, usable;
+        wlr_output_layout_get_box(server->output_layout, output->wlr_output, &full);
+        usable = full;
+        for (int pass = 0; pass < 2; ++pass) {
+            for (int level = 3; level >= 0; --level) {
+                struct sh_layer *layer;
+                wl_list_for_each(layer, &server->layers, link) {
+                    struct wlr_layer_surface_v1 *surface = layer->surface;
+                    if (surface->output != output->wlr_output || !surface->initialized ||
+                        (!surface->surface->mapped && !surface->initial_commit) ||
+                        surface->current.layer != (unsigned)level ||
+                        (surface->current.exclusive_zone > 0) != (pass == 0))
+                        continue;
+                    wlr_scene_node_reparent(&layer->scene->tree->node, server->layer_trees[level]);
+                    wlr_scene_layer_surface_v1_configure(layer->scene, &full, &usable);
+                    if (!exclusive && surface->surface->mapped && level >= 2 &&
+                        surface->current.keyboard_interactive ==
+                            ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)
+                        exclusive = layer;
+                }
+            }
+        }
+        if (!wlr_box_equal(&output->usable, &usable)) {
+            output->usable = usable;
+            reflow_output(server, output->wlr_output);
+        }
+    }
+    if (exclusive)
+        focus_layer(exclusive);
+    else if (server->focused_layer &&
+             (!server->focused_layer->surface->surface->mapped ||
+              server->focused_layer->surface->current.keyboard_interactive ==
+                  ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE))
+        focus_previous(server);
+}
+static void layer_commit(struct wl_listener *listener, void *data) {
+    struct sh_layer *layer = wl_container_of(listener, layer, commit);
+    if (layer->surface->initial_commit || layer->surface->current.committed)
+        arrange_layers(layer->server);
+}
+static void layer_map(struct wl_listener *listener, void *data) {
+    struct sh_layer *layer = wl_container_of(listener, layer, map);
+    arrange_layers(layer->server);
+}
+static void layer_unmap(struct wl_listener *listener, void *data) {
+    struct sh_layer *layer = wl_container_of(listener, layer, unmap);
+    if (layer->server->focused_layer == layer)
+        focus_previous(layer->server);
+    arrange_layers(layer->server);
+}
+static void layer_destroy(struct wl_listener *listener, void *data) {
+    struct sh_layer *layer = wl_container_of(listener, layer, destroy);
+    struct sh_server *server = layer->server;
+    if (server->focused_layer == layer)
+        focus_previous(server);
+    wl_list_remove(&layer->commit.link);
+    wl_list_remove(&layer->map.link);
+    wl_list_remove(&layer->unmap.link);
+    wl_list_remove(&layer->destroy.link);
+    wl_list_remove(&layer->new_popup.link);
+    wl_list_remove(&layer->link);
+    free(layer);
+    arrange_layers(server);
+}
+static void layer_new_popup(struct wl_listener *listener, void *data) {
+    struct sh_layer *layer = wl_container_of(listener, layer, new_popup);
+    create_popup(data, layer->scene->tree);
+}
+static void server_new_layer_surface(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_layer_surface);
+    struct wlr_layer_surface_v1 *surface = data;
+    if (!surface->output) {
+        if (wl_list_empty(&server->outputs)) {
+            wlr_layer_surface_v1_destroy(surface);
+            return;
+        }
+        struct sh_output *first = wl_container_of(server->outputs.next, first, link);
+        surface->output = first->wlr_output;
+    }
+    struct sh_layer *layer = calloc(1, sizeof(*layer));
+    if (!layer) {
+        wlr_layer_surface_v1_destroy(surface);
+        return;
+    }
+    layer->server = server;
+    layer->surface = surface;
+    layer->node = (struct sh_node){SH_NODE_LAYER, layer};
+    layer->scene =
+        wlr_scene_layer_surface_v1_create(server->layer_trees[surface->pending.layer], surface);
+    if (!layer->scene) {
+        free(layer);
+        wlr_layer_surface_v1_destroy(surface);
+        return;
+    }
+    layer->scene->tree->node.data = &layer->node;
+    surface->data = layer;
+    wl_list_insert(&server->layers, &layer->link);
+    layer->commit.notify = layer_commit;
+    wl_signal_add(&surface->surface->events.commit, &layer->commit);
+    layer->map.notify = layer_map;
+    wl_signal_add(&surface->surface->events.map, &layer->map);
+    layer->unmap.notify = layer_unmap;
+    wl_signal_add(&surface->surface->events.unmap, &layer->unmap);
+    layer->destroy.notify = layer_destroy;
+    wl_signal_add(&surface->events.destroy, &layer->destroy);
+    layer->new_popup.notify = layer_new_popup;
+    wl_signal_add(&surface->events.new_popup, &layer->new_popup);
 }
 
 static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *data);
@@ -698,7 +1022,7 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
     struct wlr_output *output = toplevel_output(toplevel);
     if (output) {
         struct wlr_box area;
-        wlr_output_layout_get_box(toplevel->server->output_layout, output, &area);
+        usable_area(toplevel->server, output, &area);
         // Keep newly opened applications reachable inside a small nested output.
         int margin = area.width < 80 || area.height < 80 ? 0 : 40;
         int width = toplevel->xdg_toplevel->base->geometry.width;
@@ -720,6 +1044,7 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
     wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
 
+    publish_toplevel(toplevel);
     focus_toplevel(toplevel);
     if (toplevel->xdg_toplevel->requested.maximized)
         xdg_toplevel_request_maximize(&toplevel->request_maximize, NULL);
@@ -732,11 +1057,13 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
         reset_cursor_mode(toplevel->server);
     }
 
+    bool was_focused = toplevel->server->focused_toplevel == toplevel;
+    if (was_focused)
+        deactivate_toplevel(toplevel->server);
+    unpublish_toplevel(toplevel);
     wl_list_remove(&toplevel->link);
-    if (!wl_list_empty(&toplevel->server->toplevels)) {
-        struct sh_toplevel *next = wl_container_of(toplevel->server->toplevels.next, next, link);
-        focus_toplevel(next);
-    }
+    if (was_focused)
+        focus_previous(toplevel->server);
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
@@ -758,6 +1085,9 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->request_resize.link);
     wl_list_remove(&toplevel->request_maximize.link);
     wl_list_remove(&toplevel->request_fullscreen.link);
+    wl_list_remove(&toplevel->request_minimize.link);
+    wl_list_remove(&toplevel->title_changed.link);
+    wl_list_remove(&toplevel->app_id_changed.link);
 
     free(toplevel);
 }
@@ -767,6 +1097,8 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
     struct sh_server *server = toplevel->server;
 
     toplevel->arranged = false;
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
     wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
     wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
     server->grabbed_toplevel = toplevel;
@@ -817,7 +1149,7 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
         struct wlr_output *output = toplevel_output(toplevel);
         if (output) {
             struct wlr_box box;
-            wlr_output_layout_get_box(toplevel->server->output_layout, output, &box);
+            usable_area(toplevel->server, output, &box);
             place_toplevel(toplevel, SH_MAXIMIZE,
                            (struct sh_rect){box.x, box.y, box.width, box.height});
         }
@@ -841,10 +1173,17 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
     toplevel->server = server;
     toplevel->xdg_toplevel = xdg_toplevel;
     toplevel->scene_tree =
-        wlr_scene_xdg_surface_create(&toplevel->server->scene->tree, xdg_toplevel->base);
-    toplevel->scene_tree->node.data = toplevel;
+        wlr_scene_xdg_surface_create(toplevel->server->windows, xdg_toplevel->base);
+    toplevel->node = (struct sh_node){SH_NODE_TOPLEVEL, toplevel};
+    toplevel->scene_tree->node.data = &toplevel->node;
     xdg_toplevel->base->data = toplevel->scene_tree;
 
+    toplevel->title_changed.notify = toplevel_title_changed;
+    wl_signal_add(&xdg_toplevel->events.set_title, &toplevel->title_changed);
+    toplevel->app_id_changed.notify = toplevel_app_id_changed;
+    wl_signal_add(&xdg_toplevel->events.set_app_id, &toplevel->app_id_changed);
+    toplevel->request_minimize.notify = toplevel_request_minimize;
+    wl_signal_add(&xdg_toplevel->events.request_minimize, &toplevel->request_minimize);
     toplevel->map.notify = xdg_toplevel_map;
     wl_signal_add(&xdg_toplevel->base->surface->events.map, &toplevel->map);
     toplevel->unmap.notify = xdg_toplevel_unmap;
@@ -882,22 +1221,25 @@ static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
     free(popup);
 }
 
-static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
-    struct wlr_xdg_popup *xdg_popup = data;
-
+static void create_popup(struct wlr_xdg_popup *xdg_popup, struct wlr_scene_tree *parent_tree) {
     struct sh_popup *popup = calloc(1, sizeof(*popup));
     popup->xdg_popup = xdg_popup;
-
-    struct wlr_xdg_surface *parent = wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
-    assert(parent != NULL);
-    struct wlr_scene_tree *parent_tree = parent->data;
     xdg_popup->base->data = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
-
     popup->commit.notify = xdg_popup_commit;
     wl_signal_add(&xdg_popup->base->surface->events.commit, &popup->commit);
 
     popup->destroy.notify = xdg_popup_destroy;
     wl_signal_add(&xdg_popup->events.destroy, &popup->destroy);
+}
+
+static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
+    struct wlr_xdg_popup *popup = data;
+    // A layer-shell popup is attached by the layer's new_popup handler instead.
+    if (!popup->parent)
+        return;
+    struct wlr_xdg_surface *parent = wlr_xdg_surface_try_from_wlr_surface(popup->parent);
+    if (parent && parent->data)
+        create_popup(popup, parent->data);
 }
 
 static int terminate_signal(int signal_number, void *data) {
@@ -982,6 +1324,16 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
 
     server.scene = wlr_scene_create();
     server.backgrounds = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_trees[0] = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_trees[1] = wlr_scene_tree_create(&server.scene->tree);
+    server.windows = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_trees[2] = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_trees[3] = wlr_scene_tree_create(&server.scene->tree);
+    wl_list_init(&server.layers);
+    server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
+    server.new_layer_surface.notify = server_new_layer_surface;
+    wl_signal_add(&server.layer_shell->events.new_surface, &server.new_layer_surface);
+    server.foreign_manager = wlr_foreign_toplevel_manager_v1_create(server.wl_display);
     server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
     wl_list_init(&server.toplevels);
@@ -1048,6 +1400,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
 
     wl_list_remove(&server.new_xdg_toplevel.link);
     wl_list_remove(&server.new_xdg_popup.link);
+    wl_list_remove(&server.new_layer_surface.link);
 
     wl_list_remove(&server.cursor_motion.link);
     wl_list_remove(&server.cursor_motion_absolute.link);
