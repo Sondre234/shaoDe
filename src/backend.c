@@ -12,6 +12,10 @@
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/backend/wayland.h>
+#include <wlr/config.h>
+#if WLR_HAS_SESSION
+#include <wlr/backend/session.h>
+#endif
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
@@ -49,6 +53,9 @@ struct sh_server {
     struct wlr_scene_tree *backgrounds;
     struct wl_display *wl_display;
     struct wlr_backend *backend;
+#if WLR_HAS_SESSION
+    struct wlr_session *session;
+#endif
     struct wlr_renderer *renderer;
     struct wlr_allocator *allocator;
     struct wlr_scene *scene;
@@ -174,6 +181,12 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
                               uint32_t edges);
 
 static bool handle_keybinding(struct sh_server *server, uint32_t modifiers, xkb_keysym_t sym) {
+#if WLR_HAS_SESSION
+    if (server->session && sym >= XKB_KEY_XF86Switch_VT_1 && sym <= XKB_KEY_XF86Switch_VT_12) {
+        wlr_session_change_vt(server->session, sym - XKB_KEY_XF86Switch_VT_1 + 1);
+        return true;
+    }
+#endif
     enum sh_action action = server->callbacks->key(server->callbacks->userdata, modifiers, sym);
     switch (action) {
     case SH_NONE:
@@ -902,11 +915,19 @@ static int reap_children(int signal_number, void *data) {
     return 0;
 }
 
-int sh_run(const struct sh_callbacks *callbacks, bool headless) {
+int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wlr_log_init(WLR_INFO, NULL);
-    if (setenv("WLR_BACKENDS", headless ? "headless" : "wayland", 1) < 0)
+    if (mode == SH_BACKEND_SESSION &&
+        !(WLR_HAS_SESSION && WLR_HAS_DRM_BACKEND && WLR_HAS_LIBINPUT_BACKEND)) {
+        wlr_log(WLR_ERROR, "wlroots needs session, DRM, and libinput support for --session");
         return 1;
-    if (headless)
+    }
+    const char *backends = mode == SH_BACKEND_SESSION    ? "drm,libinput"
+                           : mode == SH_BACKEND_HEADLESS ? "headless"
+                                                         : "wayland";
+    if (setenv("WLR_BACKENDS", backends, 1) < 0)
+        return 1;
+    if (mode == SH_BACKEND_HEADLESS)
         setenv("WLR_HEADLESS_OUTPUTS", "1", 1);
 
     struct sh_server server = {.callbacks = callbacks};
@@ -923,7 +944,13 @@ int sh_run(const struct sh_callbacks *callbacks, bool headless) {
     struct wl_event_source *sigchld =
         wl_event_loop_add_signal(loop, SIGCHLD, reap_children, &server);
 
-    server.backend = wlr_backend_autocreate(wl_display_get_event_loop(server.wl_display), NULL);
+    server.backend = wlr_backend_autocreate(loop,
+#if WLR_HAS_SESSION
+                                            &server.session
+#else
+                                            NULL
+#endif
+    );
     if (server.backend == NULL) {
         wlr_log(WLR_ERROR, "failed to create wlr_backend");
         return 1;

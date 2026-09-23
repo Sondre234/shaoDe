@@ -16,7 +16,8 @@ with C++ configuration and placement policy. The Qt shell is not implemented yet
 Requirements: CMake 3.25+, C11 and C++20 compilers, pkg-config, Lua 5.4,
 xkbcommon, wlroots **0.20.x**, wayland-server, wayland-protocols, and
 wayland-scanner. Tests also use Python 3 and wayland-client. Ninja is used below.
-Arch provides wlroots as `wlroots0.20`.
+Gentoo setup and standalone-session instructions are in [docs/gentoo.md](docs/gentoo.md).
+The build supports a normal install prefix and DESTDIR staging.
 
 ```sh
 cmake -S . -B build -G Ninja -DSHAODE_BUILD_COMPOSITOR=ON
@@ -28,7 +29,9 @@ ctest --test-dir build --output-on-failure
 
 The compositor opens a nested window in the current Wayland session.
 It selects only the Wayland backend; `--headless` selects the headless backend
-for testing. It does not install a login session or start a DRM backend.
+for testing. The separate `--session` option selects DRM/libinput from a TTY; that physical
+backend is experimental and has not yet been hardware-tested. Session-file
+installation is opt-in with `SHAODE_INSTALL_SESSION=ON`.
 Applications launched through `--exec`, startup entries, or bindings inherit
 the nested Wayland socket. Commands after `--exec` consume all remaining
 arguments; there is no shell expansion. No applications start automatically
@@ -70,7 +73,8 @@ and file I/O libraries are not exposed. Configuration is user-controlled code;
 the evaluator is not a security boundary for untrusted scripts.
 
 Without `--config`, the executable looks for `$XDG_CONFIG_HOME/shaode/init.lua`,
-or `~/.config/shaode/init.lua` when `XDG_CONFIG_HOME` is unset. It never creates
+or `~/.config/shaode/init.lua` when `XDG_CONFIG_HOME` is unset, then falls back
+to the installed example under the configured data directory. It never creates
 or overwrites a personal configuration automatically.
 
 CTest covers configuration validation, layout bounds/non-overlap, and a headless

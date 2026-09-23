@@ -10,6 +10,16 @@ import time
 
 compositor, probe, example = map(lambda p: str(Path(p).resolve()), sys.argv[1:])
 
+# Reject standalone mode inside a GUI before attempting device/session access.
+for arguments, expected in [
+    (["--session"], "outside an existing graphical session"),
+    (["--session", "--headless"], "choose only one backend"),
+]:
+    result = subprocess.run([compositor, "--config", example, *arguments],
+                            env=dict(os.environ, WAYLAND_DISPLAY="test-parent"),
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode != 0 and expected in result.stderr, result.stderr
+
 def wait_for(predicate, process, message):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

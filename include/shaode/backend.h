@@ -43,7 +43,8 @@ struct sh_callbacks {
     void (*startup)(void *);
 };
 
-int sh_run(const struct sh_callbacks *callbacks, bool headless);
+enum sh_backend_mode { SH_BACKEND_NESTED, SH_BACKEND_HEADLESS, SH_BACKEND_SESSION };
+int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode);
 
 struct sh_rect {
     int x, y, width, height;

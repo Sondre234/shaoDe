@@ -73,25 +73,34 @@ struct Runtime {
     }
 };
 std::filesystem::path default_config() {
+    std::filesystem::path personal;
     if (const auto *xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
-        return std::filesystem::path(xdg) / "shaode/init.lua";
-    if (const auto *home = std::getenv("HOME"); home && *home)
-        return std::filesystem::path(home) / ".config/shaode/init.lua";
-    throw std::runtime_error("pass --config PATH or set XDG_CONFIG_HOME");
+        personal = std::filesystem::path(xdg) / "shaode/init.lua";
+    else if (const auto *home = std::getenv("HOME"); home && *home)
+        personal = std::filesystem::path(home) / ".config/shaode/init.lua";
+    if (!personal.empty() && std::filesystem::exists(personal))
+        return personal;
+    if (std::filesystem::exists(SHAODE_DEFAULT_CONFIG))
+        return SHAODE_DEFAULT_CONFIG;
+    throw std::runtime_error(
+        "no configuration found; use --config config/init.lua from the source directory");
 }
 void usage() {
-    std::cout << "Usage: shaode [--config PATH] [--check-config] [--headless] [--exec PROGRAM "
-                 "[ARGS...]]\n"
-                 "Default: nested Wayland compositor; no DRM/session takeover.\n"
-                 "Config: $XDG_CONFIG_HOME/shaode/init.lua or ~/.config/shaode/init.lua\n"
-                 "Use --config config/init.lua from the source directory to get started.\n"
-                 "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n";
+    std::cout
+        << "Usage: shaode [--config PATH] [--check-config] [--headless | --session] [--exec "
+           "PROGRAM "
+           "[ARGS...]]\n"
+           "Default: nested Wayland compositor. --session: standalone DRM/libinput on a TTY.\n"
+           "Config: $XDG_CONFIG_HOME/shaode/init.lua or ~/.config/shaode/init.lua\n"
+           "Falls back to the installed default; use --config config/init.lua in the source tree.\n"
+           "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n";
 }
 } // namespace
 int main(int argc, char **argv) {
     try {
         std::filesystem::path path;
-        bool check = false, headless = false;
+        bool check = false;
+        sh_backend_mode mode = SH_BACKEND_NESTED;
         shaode::Command command;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
@@ -99,13 +108,19 @@ int main(int argc, char **argv) {
                 usage();
                 return 0;
             }
+            if (arg == "--version") {
+                std::cout << "shaoDe " << SHAODE_VERSION << '\n';
+                return 0;
+            }
             if (arg == "--config" && i + 1 < argc)
                 path = argv[++i];
             else if (arg == "--check-config")
                 check = true;
-            else if (arg == "--headless")
-                headless = true;
-            else if (arg == "--exec" && i + 1 < argc) {
+            else if (arg == "--headless" || arg == "--session") {
+                if (mode != SH_BACKEND_NESTED)
+                    throw std::runtime_error("choose only one backend mode");
+                mode = arg == "--headless" ? SH_BACKEND_HEADLESS : SH_BACKEND_SESSION;
+            } else if (arg == "--exec" && i + 1 < argc) {
                 while (++i < argc)
                     command.emplace_back(argv[i]);
             } else
@@ -119,11 +134,17 @@ int main(int argc, char **argv) {
                       << " bindings)\n";
             return 0;
         }
-        if (!headless && (!std::getenv("WAYLAND_DISPLAY") || !*std::getenv("WAYLAND_DISPLAY")))
+        if (mode == SH_BACKEND_NESTED &&
+            (!std::getenv("WAYLAND_DISPLAY") || !*std::getenv("WAYLAND_DISPLAY")))
             throw std::runtime_error("a running Wayland session is required (or use --headless)");
+        if (mode == SH_BACKEND_SESSION &&
+            ((std::getenv("WAYLAND_DISPLAY") && *std::getenv("WAYLAND_DISPLAY")) ||
+             (std::getenv("DISPLAY") && *std::getenv("DISPLAY"))))
+            throw std::runtime_error("start --session from a TTY or a display manager, outside an "
+                                     "existing graphical session");
         const sh_callbacks callbacks{&runtime, Runtime::settings, Runtime::key, Runtime::reload,
                                      Runtime::startup};
-        return sh_run(&callbacks, headless);
+        return sh_run(&callbacks, mode);
     } catch (const std::exception &error) {
         std::cerr << "shaode: " << error.what() << '\n';
         return 1;
