@@ -19,6 +19,8 @@ between release series. Relevant Gentoo packages are:
 - `dev-build/cmake`, `dev-build/ninja`, and `virtual/pkgconfig`
 - A compiler supporting C11 and C++20
 - Python 3 for the automated tests; a Wayland terminal for interactive testing
+- Optional: `gui-apps/swaylock` (or another ext-session-lock locker) and
+  `gui-apps/swayidle` for locking and idle timeouts
 
 Standalone operation requires wlroots built with `drm`, `libinput`, and `session`
 USE flags. X11 applications additionally need wlroots with the `X` USE flag and
@@ -102,8 +104,8 @@ Ctrl+Alt+F1 through F12 request VT switching through wlroots/libseat; the Lua qu
 binding remains Alt+Shift+Escape. Do not launch the compositor with sudo.
 
 This backend path is compiled but has not been exercised on physical hardware.
-Keep another TTY available while testing. Session locking, portals,
-and full multi-monitor management are not implemented yet; this is not ready to
+Keep another TTY available while testing. Portals and full multi-monitor
+management are not implemented yet; this is not ready to
 replace a secured daily session.
 
 References:

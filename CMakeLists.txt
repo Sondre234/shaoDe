@@ -129,6 +129,28 @@ if(SHAODE_BUILD_COMPOSITOR)
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
             ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
         set_tests_properties(compositor_smoke PROPERTIES TIMEOUT 60)
+        set(LOCK_XML ${PROTOCOL_DIR}/staging/ext-session-lock/ext-session-lock-v1.xml)
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-client-protocol.h
+            COMMAND ${WAYLAND_SCANNER} client-header ${LOCK_XML}
+            ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-client-protocol.h
+            DEPENDS ${LOCK_XML})
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-protocol.c
+            COMMAND ${WAYLAND_SCANNER} private-code ${LOCK_XML}
+            ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-protocol.c
+            DEPENDS ${LOCK_XML})
+        add_executable(lock_probe tests/lock_probe.c
+            ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-client-protocol.h
+            ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-protocol.c
+            ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h
+            ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c)
+        target_include_directories(lock_probe PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+        target_link_libraries(lock_probe PRIVATE PkgConfig::WAYLAND_CLIENT)
+        target_compile_options(lock_probe PRIVATE -Wall -Wextra -Wno-unused-parameter)
+        add_test(NAME session_lock COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/lock_smoke.py
+            $<TARGET_FILE:shaode> $<TARGET_FILE:lock_probe>
+            ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+        set_tests_properties(session_lock PROPERTIES TIMEOUT 60)
         # XWayland coverage needs wlroots built with X support and an Xwayland binary.
         find_program(XWAYLAND_BINARY Xwayland)
         if(SHAODE_HAS_XWAYLAND AND XWAYLAND_BINARY)

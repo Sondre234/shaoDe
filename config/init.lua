@@ -33,6 +33,8 @@ return {
         { mods = { mod }, key = "Down", action = "restore" },
         { mods = { mod }, key = "t", action = "tile" },
         { mods = { mod }, key = "F11", action = "fullscreen" },
+        -- Lock with any ext-session-lock client, e.g.:
+        -- { mods = { "Logo" }, key = "l", action = "spawn", command = { "swaylock" } },
         { mods = { mod, "Shift" }, key = "r", action = "reload" },
         { mods = { mod, "Shift" }, key = "Escape", action = "quit" },
     },
