@@ -25,6 +25,5 @@ exec docker run --rm --privileged -v /dev:/dev \
     -v "$here:/scripts:ro" -v "$VM_DIR:/vm" \
     -e VM_USER="$VM_USER" -e VM_DISK_SIZE="$VM_DISK_SIZE" \
     -e VM_TIMEZONE="$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')" \
-    -e VM_KEYMAP="$(localectl status 2>/dev/null | sed -n 's/.*VC Keymap: //p')" \
     -e JOBS="$(nproc)" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
     "$VM_BUILDER_IMAGE" bash /scripts/builder.sh

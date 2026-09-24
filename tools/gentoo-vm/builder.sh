@@ -64,7 +64,7 @@ cp /scripts/chroot.sh /vm/authorized_keys "$root/root/vm-setup/"
 
 chroot "$root" env -i HOME=/root TERM="${TERM:-dumb}" \
     PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-    VM_USER="$VM_USER" VM_TIMEZONE="$VM_TIMEZONE" VM_KEYMAP="${VM_KEYMAP:-}" JOBS="$JOBS" \
+    VM_USER="$VM_USER" VM_TIMEZONE="$VM_TIMEZONE" JOBS="$JOBS" \
     ESP_DEV="$esp" ROOT_DEV="$rootdev" \
     bash /root/vm-setup/chroot.sh
 
