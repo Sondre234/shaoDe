@@ -25,19 +25,19 @@ int main(int argc, char **argv) {
                 "example shell settings missing");
         require(config.shell.launchers.front().command == shaode::Command{"kitty"},
                 "pinned command arguments changed");
-        auto *spawn = config.binding(SH_ALT, XKB_KEY_Return);
+        auto *spawn = config.binding(SH_LOGO, XKB_KEY_q);
         require(spawn && spawn->command == shaode::Command{"kitty"}, "spawn argv mismatch");
-        require(config.binding(SH_ALT | SH_SHIFT | 2, XKB_KEY_R)->action == SH_RELOAD,
+        require(config.binding(SH_LOGO | SH_SHIFT | 2, XKB_KEY_R)->action == SH_RELOAD,
                 "shifted shortcut or CapsLock normalization failed");
-        require(!config.binding(SH_ALT | SH_CTRL, XKB_KEY_Return), "extra modifiers matched");
-        auto *fullscreen = config.binding(SH_ALT, XKB_KEY_F11);
+        require(!config.binding(SH_LOGO | SH_CTRL, XKB_KEY_q), "extra modifiers matched");
+        auto *fullscreen = config.binding(SH_LOGO, XKB_KEY_f);
         require(fullscreen && fullscreen->action == SH_FULLSCREEN, "fullscreen binding missing");
-        auto *move = config.binding(SH_CTRL | SH_ALT | SH_SHIFT, XKB_KEY_3);
+        auto *move = config.binding(SH_LOGO | SH_SHIFT, XKB_KEY_3);
         require(move && move->action == SH_MOVE_TO_WORKSPACE && move->workspace == 3,
                 "move-to-workspace binding missing");
         require(config.settings.workspaces == 4, "example workspace count changed");
         require(!config.settings.tiling, "example starts tiled");
-        auto *toggle = config.binding(SH_ALT | SH_SHIFT, XKB_KEY_T);
+        auto *toggle = config.binding(SH_LOGO | SH_SHIFT, XKB_KEY_T);
         require(toggle && toggle->action == SH_TOGGLE_TILING, "tiling toggle binding missing");
         require(shaode::parse_config("return {layout={tiling=true}}").settings.tiling,
                 "layout.tiling not parsed");

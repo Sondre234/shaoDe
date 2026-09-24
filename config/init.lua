@@ -1,7 +1,8 @@
 -- shaoDe configuration, API version 1.
 -- Launch commands are argument arrays, never shell strings.
--- Alt avoids most shortcuts reserved by the host compositor when nested.
-local mod = "Alt"
+-- Hyprland-style Super shortcuts. A nested session inside a host that grabs Super
+-- (Hyprland, GNOME) never sees them; set mod = "Alt" there.
+local mod = "Super"
 
 return {
     version = 1,
@@ -33,30 +34,30 @@ return {
     },
     startup = {}, -- e.g. { { "kitty" } }
     bindings = {
-        { mods = { mod }, key = "Return", action = "spawn", command = { "kitty" } },
-        { mods = { mod }, key = "Tab", action = "cycle" },
-        { mods = { mod }, key = "F4", action = "close" },
+        { mods = { mod }, key = "q", action = "spawn", command = { "kitty" } },
+        { mods = { mod }, key = "c", action = "close" },
+        { mods = { mod }, key = "m", action = "quit" },
+        { mods = { mod }, key = "v", action = "toggle_floating" },
+        { mods = { mod }, key = "f", action = "fullscreen" },
+        { mods = { mod }, key = "t", action = "tile" },
+        { mods = { mod, "Shift" }, key = "t", action = "toggle_tiling" },
+        { mods = { "Alt" }, key = "Tab", action = "cycle" },
         { mods = { mod }, key = "Left", action = "snap_left" },
         { mods = { mod }, key = "Right", action = "snap_right" },
         { mods = { mod }, key = "Up", action = "maximize" },
         { mods = { mod }, key = "Down", action = "restore" },
-        { mods = { mod }, key = "t", action = "tile" },
-        { mods = { mod, "Shift" }, key = "t", action = "toggle_tiling" },
-        { mods = { mod, "Shift" }, key = "f", action = "toggle_floating" },
-        { mods = { mod }, key = "F11", action = "fullscreen" },
         -- Lock with any ext-session-lock client, e.g.:
-        -- { mods = { "Super" }, key = "l", action = "spawn", command = { "swaylock" } },
+        -- { mods = { mod }, key = "l", action = "spawn", command = { "swaylock" } },
+        { mods = { mod }, key = "1", action = "workspace", workspace = 1 },
+        { mods = { mod }, key = "2", action = "workspace", workspace = 2 },
+        { mods = { mod }, key = "3", action = "workspace", workspace = 3 },
+        { mods = { mod }, key = "4", action = "workspace", workspace = 4 },
+        { mods = { mod, "Shift" }, key = "1", action = "move_to_workspace", workspace = 1 },
+        { mods = { mod, "Shift" }, key = "2", action = "move_to_workspace", workspace = 2 },
+        { mods = { mod, "Shift" }, key = "3", action = "move_to_workspace", workspace = 3 },
+        { mods = { mod, "Shift" }, key = "4", action = "move_to_workspace", workspace = 4 },
         { mods = { "Ctrl", mod }, key = "Right", action = "workspace_next" },
         { mods = { "Ctrl", mod }, key = "Left", action = "workspace_prev" },
-        { mods = { "Ctrl", mod }, key = "1", action = "workspace", workspace = 1 },
-        { mods = { "Ctrl", mod }, key = "2", action = "workspace", workspace = 2 },
-        { mods = { "Ctrl", mod }, key = "3", action = "workspace", workspace = 3 },
-        { mods = { "Ctrl", mod }, key = "4", action = "workspace", workspace = 4 },
-        { mods = { "Ctrl", mod, "Shift" }, key = "1", action = "move_to_workspace", workspace = 1 },
-        { mods = { "Ctrl", mod, "Shift" }, key = "2", action = "move_to_workspace", workspace = 2 },
-        { mods = { "Ctrl", mod, "Shift" }, key = "3", action = "move_to_workspace", workspace = 3 },
-        { mods = { "Ctrl", mod, "Shift" }, key = "4", action = "move_to_workspace", workspace = 4 },
         { mods = { mod, "Shift" }, key = "r", action = "reload" },
-        { mods = { mod, "Shift" }, key = "Escape", action = "quit" },
     },
 }

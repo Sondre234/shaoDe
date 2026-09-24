@@ -85,7 +85,7 @@ development add `-DSHAODE_BUILD_SHELL=OFF`; Qt, GIO, and LayerShellQt are then
 unnecessary. `--no-shell` skips shell startup at runtime. Lua's `shell` table
 controls its colors, panel height, wallpaper path, and pinned launchers;
 `layout.tiling = true` starts with automatic tiling, which the panel button and
-Alt+Shift+T toggle at runtime. Reload with Alt+Shift+R after editing the file. Invalid configuration retains the last
+Super+Shift+T toggle at runtime. Reload with Super+Shift+R after editing the file. Invalid configuration retains the last
 working settings.
 
 `BUILD_TESTING=OFF` omits the test tools/Python requirement. `DESTDIR` staging and
@@ -113,7 +113,7 @@ dbus-run-session -- "$HOME/.local/bin/shaode" --session
 or `WAYLAND_DISPLAY` set is rejected to avoid accidental session takeover.
 Ctrl+Alt+F1 through F12 request VT switching through wlroots/libseat (Ctrl+AltGr
 works too, for keyboards whose only Alt key is Right Alt); the Lua quit
-binding remains Alt+Shift+Escape. Do not launch the compositor with sudo.
+binding is Super+M. Do not launch the compositor with sudo.
 
 Switching to another VT pauses the session; wlroots removes every output until you
 return, and shaoDe, the shell, and open windows carry on. On laptops whose F-keys

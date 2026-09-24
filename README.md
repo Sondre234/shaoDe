@@ -57,24 +57,25 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 
 | Input | Action |
 | --- | --- |
-| Alt + left/right drag | Move / resize a window (on a tile: move it, or move its splits) |
-| Alt + Enter | Launch Kitty |
+| Super + left/right drag | Move / resize a window (on a tile: move it, or move its splits) |
+| Super + Q | Launch Kitty |
+| Super + C | Close focused window |
+| Super + M | Exit shaoDe |
+| Super + V | Float or tile the focused window |
+| Super + F | Toggle fullscreen |
+| Super + T | Arrange the current output's windows in a grid (floating mode) |
+| Super + Shift + T | Turn automatic tiling on or off |
 | Alt + Tab | Cycle windows |
-| Alt + F4 | Close focused window |
-| Alt + Left/Right | Snap to half the output |
-| Alt + Up/Down | Maximize / restore saved floating geometry |
-| Alt + T | Arrange the current output's windows in a grid (floating mode) |
-| Alt + Shift + T | Turn automatic tiling on or off |
-| Alt + Shift + F | Float or tile the focused window |
-| Alt + F11 | Toggle fullscreen |
-| Ctrl + Alt + 1–4 | Switch to workspace 1–4 |
-| Ctrl + Alt + Shift + 1–4 | Move the focused window to workspace 1–4 |
-| Ctrl + Alt + Left/Right | Previous / next workspace |
-| Alt + Shift + R | Reload Lua configuration |
-| Alt + Shift + Escape | Exit the nested compositor |
+| Super + Left/Right | Snap to half the output |
+| Super + Up/Down | Maximize / restore saved floating geometry |
+| Super + 1–4 | Switch to workspace 1–4 |
+| Super + Shift + 1–4 | Move the focused window to workspace 1–4 |
+| Super + Ctrl + Left/Right | Previous / next workspace |
+| Super + Shift + R | Reload Lua configuration |
 
 The host compositor can consume shortcuts before the nested compositor receives
-them; edit the Lua bindings if necessary. SIGHUP also requests a reload, and
+them: a host that grabs Super (Hyprland, GNOME) keeps these, so set `mod = "Alt"` in
+the Lua file for nested sessions. SIGHUP also requests a reload, and
 SIGINT/SIGTERM requests shutdown. A reload does not rerun startup commands.
 
 Windows that leave decorations to the window manager (X11 applications such as Spotify)
@@ -89,7 +90,7 @@ client's next buffer.
 
 ## Tiling
 
-The tiling button on the panel (next to the clock), Alt + Shift + T, or
+The tiling button on the panel (next to the clock), Super + Shift + T, or
 `shaode msg toggle_tiling` switches between floating windows and automatic tiling;
 Lua `layout.tiling = true` starts tiled. Tiling follows Hyprland's default *dwindle*
 layout: every output and workspace has its own binary split tree, each split divides
@@ -101,7 +102,7 @@ space back to its neighbour.
 - Mod + right drag on a tile, or dragging its edge, moves the split lines around it.
 - Moving a tile (Mod + left drag or its title bar) lifts it out; dropping it splits
   the tile under the pointer.
-- Dialogs and fixed-size windows float. Alt + Shift + F (`toggle_floating`) floats
+- Dialogs and fixed-size windows float. Super + V (`toggle_floating`) floats
   or tiles the focused window; snapping or maximizing a tile also floats it.
 - Turning tiling off returns every window to its floating position and size.
 - Minimized windows leave the tiling and rejoin it when restored; windows moved to

@@ -16,7 +16,7 @@ ln -sf "$log" "$logdir/tty-test-latest.log"
     echo "tty: $(tty) date: $(date)"
     env | grep -E '^(XDG_|WLR_|WAYLAND_DISPLAY|DISPLAY)' || true
 } >"$log"
-echo "shaoDe TTY test: log $log, auto-quit after ${limit}s (Alt+Shift+Escape quits sooner)"
+echo "shaoDe TTY test: log $log, auto-quit after ${limit}s (Super+M quits sooner)"
 sleep 2
 
 rc=0
