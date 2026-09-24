@@ -82,7 +82,7 @@ get three small macOS-style dots over their top-left corner: close, minimize, an
 fullscreen. Dragging the pill around the dots moves the window; over a fullscreen window
 the dots appear when the pointer nears that corner. Other windows decorate themselves.
 
-Initial limitations: snapping is keyboard-driven, without edge-drag previews. Fullscreen covers the panel while the window is focused;
+Limitations: snapping is keyboard-driven, without edge-drag previews. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
 client's next buffer.
@@ -234,8 +234,8 @@ remaining limitations.
    icons, verified live on physical hardware.
 4. **Done:** automatic dwindle tiling with a panel toggle. Next: drag-to-edge previews,
    window rules, and Lua extension APIs shared by mouse controls and shortcuts.
-5. Session integration: multi-monitor policy, notifications, tray,
-   power and audio controls. Done: portals and screen sharing.
+5. Session integration: notifications, tray, power and audio controls. Done: portals,
+   screen sharing, and monitor order.
 
 The compositor targets wlroots 0.20 specifically, because its API changes
 between release series. Develop nested inside the existing Wayland session first.

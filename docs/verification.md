@@ -51,8 +51,8 @@ repository's automated tests do not control the user's desktop.
 Physical-device testing, hotplug, multi-monitor behavior, fractional scaling,
 clipboard interoperability, client-side title-bar grabs, and extended soak tests
 remain. The compositor checkpoint did not include shell UI, workspaces, persistent tiling,
-fullscreen handling, XWayland, portals, or session locking (all but portals were
-added later; see the tiling checkpoint below and the README). Interactive resize
+fullscreen handling, XWayland, portals, or session locking (all were added later;
+see the checkpoints below and the README). Interactive resize
 positions are applied before clients submit their replacement buffers. This is
 a development checkpoint for nested use, not a complete desktop session.
 
@@ -126,8 +126,8 @@ the console's keyboard stayed unusable until a reboot. Start `--session` from th
 console itself. VT switching on NVIDIA therefore remains unverified.
 
 Clients noted that shaoDe lacks xdg-activation, primary selection, fractional
-scaling, and server-side decorations. All but server-side decorations were added later
-(see the browser checkpoint below).
+scaling, and server-side decorations. The first three were added later (see the browser
+checkpoint below); X11 windows that ask for decorations now get window controls.
 
 Still untested on hardware: VT switching on NVIDIA, hotplug, suspend/resume, lid
 close, and brightness/volume keys.
