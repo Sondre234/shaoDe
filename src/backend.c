@@ -26,6 +26,7 @@
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
@@ -137,6 +138,10 @@ struct sh_server {
     struct wlr_seat *seat;
     struct wl_listener new_input;
     struct wl_listener request_cursor;
+    struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
+    struct wl_listener request_set_shape;
+    uint32_t shape_edges; // edges of the client's single-edge resize shape, else 0
+    uint32_t shown_edges; // edges of the resize cursor currently shown for it
     struct wl_listener pointer_focus_change;
     struct wl_listener request_set_selection;
     struct wl_list keyboards;
@@ -710,6 +715,7 @@ static void seat_request_cursor(struct wl_listener *listener, void *data) {
     struct wlr_seat_client *focused_client = server->seat->pointer_state.focused_client;
 
     if (focused_client == event->seat_client) {
+        server->shape_edges = 0;
         wlr_cursor_set_surface(server->cursor, event->surface, event->hotspot_x, event->hotspot_y);
     }
 }
@@ -755,6 +761,75 @@ static struct sh_toplevel *desktop_toplevel_at(struct sh_server *server, double 
                                                double *sy) {
     struct sh_node *node = desktop_node_at(server, x, y, surface, sx, sy);
     return node && node->kind == SH_NODE_TOPLEVEL ? node->owner : NULL;
+}
+
+/* Clients report exact corners only in a few pixels; a single-edge grab near the end of that
+ * edge is almost always meant as a corner resize. */
+static uint32_t corner_edges(struct sh_toplevel *toplevel, uint32_t edges) {
+    struct wlr_cursor *cursor = toplevel->server->cursor;
+    struct wlr_box geo_box = toplevel_geometry(toplevel);
+    double left = toplevel->scene_tree->node.x + geo_box.x;
+    double top = toplevel->scene_tree->node.y + geo_box.y;
+    double margin_x = geo_box.width / 4.0 < 32 ? geo_box.width / 4.0 : 32;
+    double margin_y = geo_box.height / 4.0 < 32 ? geo_box.height / 4.0 : 32;
+    if ((edges & (WLR_EDGE_LEFT | WLR_EDGE_RIGHT)) == 0) {
+        if (cursor->x < left + margin_x)
+            edges |= WLR_EDGE_LEFT;
+        else if (cursor->x > left + geo_box.width - margin_x)
+            edges |= WLR_EDGE_RIGHT;
+    }
+    if ((edges & (WLR_EDGE_TOP | WLR_EDGE_BOTTOM)) == 0) {
+        if (cursor->y < top + margin_y)
+            edges |= WLR_EDGE_TOP;
+        else if (cursor->y > top + geo_box.height - margin_y)
+            edges |= WLR_EDGE_BOTTOM;
+    }
+    return edges;
+}
+
+/* Show a corner cursor wherever an edge grab would become a corner resize, so the pointer
+ * matches what dragging will do. */
+static void update_resize_cursor(struct sh_server *server, struct sh_toplevel *toplevel) {
+    if (!server->shape_edges || !toplevel)
+        return;
+    uint32_t edges = corner_edges(toplevel, server->shape_edges);
+    if (edges == server->shown_edges)
+        return;
+    server->shown_edges = edges;
+    wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, wlr_xcursor_get_resize_name(edges));
+}
+
+static uint32_t shape_edges(enum wp_cursor_shape_device_v1_shape shape) {
+    switch (shape) {
+    case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE:
+        return WLR_EDGE_TOP;
+    case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE:
+        return WLR_EDGE_BOTTOM;
+    case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE:
+        return WLR_EDGE_LEFT;
+    case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE:
+        return WLR_EDGE_RIGHT;
+    default:
+        return 0;
+    }
+}
+
+static void cursor_request_set_shape(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, request_set_shape);
+    struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
+    if (event->device_type != WLR_CURSOR_SHAPE_MANAGER_V1_DEVICE_TYPE_POINTER ||
+        server->seat->pointer_state.focused_client != event->seat_client)
+        return;
+    server->shape_edges = shape_edges(event->shape);
+    server->shown_edges = 0;
+    wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr,
+                           wlr_cursor_shape_v1_name(event->shape));
+    if (server->cursor_mode == SH_CURSOR_PASSTHROUGH) {
+        struct wlr_surface *surface;
+        double sx, sy;
+        update_resize_cursor(server, desktop_toplevel_at(server, server->cursor->x,
+                                                         server->cursor->y, &surface, &sx, &sy));
+    }
 }
 
 static void reset_cursor_mode(struct sh_server *server) {
@@ -817,13 +892,16 @@ static void process_cursor_motion(struct sh_server *server, uint32_t time) {
     double sx, sy;
     struct wlr_seat *seat = server->seat;
     struct wlr_surface *surface = NULL;
-    desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+    struct sh_toplevel *toplevel =
+        desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
     if (!surface) {
+        server->shape_edges = 0;
         wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
     }
     if (surface) {
         wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
         wlr_seat_pointer_notify_motion(seat, time, sx, sy);
+        update_resize_cursor(server, toplevel);
     } else {
         wlr_seat_pointer_clear_focus(seat);
     }
@@ -1650,6 +1728,8 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
     } else {
         struct wlr_box geo_box = toplevel_geometry(toplevel);
 
+        edges = corner_edges(toplevel, edges);
+
         double border_x = (toplevel->scene_tree->node.x + geo_box.x) +
                           ((edges & WLR_EDGE_RIGHT) ? geo_box.width : 0);
         double border_y = (toplevel->scene_tree->node.y + geo_box.y) +
@@ -2445,6 +2525,9 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     server.seat = wlr_seat_create(server.wl_display, "seat0");
     server.request_cursor.notify = seat_request_cursor;
     wl_signal_add(&server.seat->events.request_set_cursor, &server.request_cursor);
+    server.cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(server.wl_display, 1);
+    server.request_set_shape.notify = cursor_request_set_shape;
+    wl_signal_add(&server.cursor_shape_mgr->events.request_set_shape, &server.request_set_shape);
     server.pointer_focus_change.notify = seat_pointer_focus_change;
     wl_signal_add(&server.seat->pointer_state.events.focus_change, &server.pointer_focus_change);
     server.request_set_selection.notify = seat_request_set_selection;
@@ -2525,6 +2608,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
 
     wl_list_remove(&server.new_input.link);
     wl_list_remove(&server.request_cursor.link);
+    wl_list_remove(&server.request_set_shape.link);
     wl_list_remove(&server.pointer_focus_change.link);
     wl_list_remove(&server.request_set_selection.link);
 
