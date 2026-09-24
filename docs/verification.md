@@ -101,5 +101,33 @@ last view closed. After the fix, repeated `chvt` round trips kept the compositor
 shell, and clients alive, and the panel returned on the recreated output. Output
 removal logs `Failed to disable CRTC` while the DRM FD is paused; it is harmless.
 
-Still untested on hardware: NVIDIA, multiple monitors, hotplug, suspend/resume,
-lid close, and brightness/volume keys.
+The same day it ran on an Arch desktop: NVIDIA RTX 4090 with the proprietary
+610.57 driver (`nvidia_drm.modeset=1`), wlroots 0.20.2 on the GLES2 renderer,
+and three monitors (HDMI-A-1 and DP-3 at 2560×1440, DP-1 at 1920×1080). No
+NVIDIA workaround variables were needed. All three screens lit at native
+resolution; the user checked the cursor crossing between them, keyboard input,
+launching and moving windows, and the panel and taskbar on each screen. The
+session was started from tty3, since SDDM's Xorg holds tty2 there, and Xwayland
+fell back from the `:0` socket SDDM owns.
+
+The test found three problems, now fixed:
+
+- Every monitor marked a 60 Hz mode as preferred, so 144 and 200 Hz panels ran
+  at 60 Hz. Outputs now use the fastest refresh at the preferred resolution
+  (200/144/144 Hz on this machine), falling back if the driver rejects it.
+- `wlr_output_layout_add_auto` placed monitors in connector order, not their
+  physical order. The Lua `outputs.order` and `outputs.primary` settings now set
+  it; the user confirmed the layout.
+- The taskbar's window menu always opened over the first task button.
+
+These runs were launched over SSH into the tty3 login (`XDG_SESSION_ID`), which
+left the process outside that logind session: Ctrl+Alt+F1 was refused
+(`Could not switch session: Access denied`), and after the compositor stopped,
+the console's keyboard stayed unusable until a reboot. Start `--session` from the
+console itself. VT switching on NVIDIA therefore remains unverified.
+
+Clients noted that shaoDe lacks xdg-activation, primary selection, fractional
+scaling, and server-side decorations.
+
+Still untested on hardware: VT switching on NVIDIA, hotplug, suspend/resume, lid
+close, and brightness/volume keys.

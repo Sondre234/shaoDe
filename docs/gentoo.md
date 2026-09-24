@@ -116,10 +116,13 @@ For a first run on new hardware, `tools/tty-session-test.sh` runs the build tree
 after `SHAODE_TEST_LIMIT` seconds (default 300) in case input does not work.
 `SHAODE_TEST_TERM` picks the terminal it opens (default foot).
 
-The backend has run on one laptop (amdgpu, single eDP panel, touchpad). NVIDIA,
-hybrid-GPU outputs, and multiple monitors are untested.
-Keep another TTY available while testing. Portals and full multi-monitor
-management are not implemented yet; this is not ready to
+The backend has run on a laptop (amdgpu, single eDP panel, touchpad) and a
+desktop (NVIDIA proprietary driver, three monitors). Hybrid-GPU outputs, hotplug,
+and VT switching on NVIDIA are untested. Start it from the console, not over SSH:
+a process outside the console's logind session cannot switch VTs.
+Keep another TTY available while testing. Set monitor order with `outputs.order`
+and `outputs.primary`; per-monitor modes and scaling are not configurable yet,
+and portals are not implemented; this is not ready to
 replace a secured daily session.
 
 References:
