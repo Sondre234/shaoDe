@@ -80,10 +80,8 @@ click-to-minimize, restore/activate, maximize/restore, show desktop, close, and
 row removal. Stale task IDs after closing a window are harmless. All five CTest
 checks pass in the preview build.
 
-LayerShellQt is not installed on the development host yet, so the live shell
-branch has not been compiled or run. Mouse interaction with the live taskbar,
-output lifecycle, panel reservation through Qt, and shell startup/reload need
-integration testing.
+At this checkpoint LayerShellQt was not yet installed, so the live shell had not
+run. It has since run on physical hardware; see the next section.
 The lower-level compositor protocols are tested separately as described above.
 
 ## First physical session

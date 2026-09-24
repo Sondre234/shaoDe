@@ -12,8 +12,8 @@ This is an early development project, not a replacement desktop session yet.
 The first working compositor supports real Wayland applications, click-to-focus,
 mouse move/resize, configurable shortcuts, half-screen snapping, maximize/restore,
 a one-shot grid arrangement, and Lua reload. It uses a TinyWL-derived C adapter
-with C++ configuration and placement policy. The shell is under development:
-its UI renders in preview mode; live LayerShellQt integration is awaiting testing.
+with C++ configuration and placement policy. The Qt shell runs live
+through LayerShellQt, with a panel and desktop on every monitor.
 
 Requirements: CMake 3.25+, C11 and C++20 compilers, pkg-config, Lua 5.4,
 xkbcommon, wlroots **0.20.x**, wayland-server, wayland-protocols, and
@@ -169,8 +169,8 @@ remaining limitations.
 1. **Done:** Lua configuration and native build foundation.
 2. **Done:** nested wlroots compositor: real applications, focus, move/resize, shortcuts,
    background, snapping, basic tiling, and reload.
-3. **In progress:** Qt Quick shell: taskbar, launcher, desktop context menu, wallpaper
-   and icons. Preview rendering is verified; live shell verification is next.
+3. **Done:** Qt Quick shell: taskbar, launcher, desktop shortcuts, wallpaper and
+   icons, verified live on physical hardware.
 4. Persistent per-workspace tiling, drag-to-edge previews, window rules, and Lua
    extension APIs shared by mouse controls and shortcuts.
 5. Session integration: multi-monitor policy, notifications, tray,
