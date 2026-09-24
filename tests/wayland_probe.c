@@ -39,6 +39,7 @@ struct probe {
     int width, height, stage;
     bool maximized, fullscreen, handle_fullscreen, done, external_control, external_panel;
     const char *close_app_id;
+    bool activate; // --activate: activate the matching window instead of closing it
     struct zwlr_foreign_toplevel_handle_v1 *close_target;
 };
 static void die(const char *message) {
@@ -286,10 +287,12 @@ int main(int argc, char **argv) {
             die("invalid external panel height");
         probe.external_panel = true;
         probe.panel_height = (int)height;
-    } else if (argc == 3 && !strcmp(argv[1], "--close")) {
+    } else if (argc == 3 && (!strcmp(argv[1], "--close") || !strcmp(argv[1], "--activate"))) {
         probe.close_app_id = argv[2];
+        probe.activate = !strcmp(argv[1], "--activate");
     } else if (argc != 1)
-        die("usage: wayland_probe [--external-control | --external-panel HEIGHT | --close APP_ID]");
+        die("usage: wayland_probe [--external-control | --external-panel HEIGHT | "
+            "--close APP_ID | --activate APP_ID]");
     struct wl_display *display = wl_display_connect(NULL);
     if (!display)
         die("cannot connect to compositor");
@@ -302,15 +305,18 @@ int main(int argc, char **argv) {
     if (!probe.layer_shell || !probe.manager || !probe.seat || !probe.output)
         die("desktop protocols missing");
     if (probe.close_app_id) {
-        // Close another client's window through the taskbar protocol.
+        // Close or activate another client's window through the taskbar protocol.
         if (wl_display_roundtrip(display) < 0)
             die("taskbar roundtrip failed");
         if (!probe.close_target)
             die("no taskbar handle with the requested app_id");
-        zwlr_foreign_toplevel_handle_v1_close(probe.close_target);
+        if (probe.activate)
+            zwlr_foreign_toplevel_handle_v1_activate(probe.close_target, probe.seat);
+        else
+            zwlr_foreign_toplevel_handle_v1_close(probe.close_target);
         if (wl_display_roundtrip(display) < 0)
-            die("close request failed");
-        puts("taskbar close sent");
+            die("taskbar request failed");
+        puts(probe.activate ? "taskbar activate sent" : "taskbar close sent");
         return 0;
     }
     if (!probe.external_panel) {

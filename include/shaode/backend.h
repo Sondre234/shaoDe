@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -20,7 +21,11 @@ enum sh_action {
     SH_RESTORE,
     SH_TILE,
     SH_RELOAD,
-    SH_FULLSCREEN
+    SH_FULLSCREEN,
+    SH_WORKSPACE,         /* argument: workspace number, from 1 */
+    SH_MOVE_TO_WORKSPACE, /* argument: workspace number, from 1 */
+    SH_WORKSPACE_NEXT,
+    SH_WORKSPACE_PREV
 };
 
 /* Modifier bits intentionally match wlroots, without importing its headers. */
@@ -35,12 +40,17 @@ struct sh_settings {
     char keyboard_layout[128];
     char keyboard_options[128];
     bool xwayland; /* read at startup; changing it needs a restart */
+    int workspaces;
 };
 
 struct sh_callbacks {
     void *userdata;
     const struct sh_settings *(*settings)(void *);
-    enum sh_action (*key)(void *, uint32_t modifiers, uint32_t keysym);
+    /* Returns the bound action; *argument receives its numeric argument, if any. */
+    enum sh_action (*key)(void *, uint32_t modifiers, uint32_t keysym, int *argument);
+    /* Parses a control-socket request into an action; SH_NONE with a message on error. */
+    enum sh_action (*command)(void *, const char *request, int *argument, char *error,
+                              size_t error_size);
     bool (*reload)(void *);
     void (*startup)(void *);
     void (*child_exited)(void *, int pid);

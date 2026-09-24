@@ -1,12 +1,17 @@
 /* Derived from wlroots TinyWL 0.20.2; see vendor/tinywl/LICENSE. */
+#define _GNU_SOURCE // accept4
 #include "shaode/backend.h"
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -80,6 +85,11 @@ struct sh_server {
     struct wl_event_source *waker_timer, *waker_input;
 #endif
     bool started;
+    int workspace; // current workspace, from 0
+
+    int control_fd;
+    char control_path[108];
+    struct wl_event_source *control_source;
     struct wlr_scene_tree *layer_trees[4];
     struct wl_list layers;
     struct wlr_layer_shell_v1 *layer_shell;
@@ -154,6 +164,7 @@ struct sh_toplevel {
     struct sh_node node;
     enum sh_action arrangement;
     bool minimized;
+    int workspace;
     struct wlr_foreign_toplevel_handle_v1 *foreign;
     struct wl_listener title_changed, app_id_changed;
     struct wl_listener foreign_activate, foreign_close, foreign_maximize, foreign_minimize;
@@ -228,6 +239,7 @@ struct sh_keyboard {
 };
 
 static void arrange_layers(struct sh_server *server);
+static void reset_cursor_mode(struct sh_server *server);
 
 /* Window operations shared by xdg-shell and XWayland toplevels. */
 static struct wlr_surface *toplevel_surface(struct sh_toplevel *toplevel) {
@@ -345,6 +357,20 @@ static bool toplevel_accepts_keyboard(struct sh_toplevel *toplevel) {
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void create_popup(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent);
 
+static bool toplevel_visible(struct sh_toplevel *toplevel) {
+    return !toplevel->minimized && toplevel->workspace == toplevel->server->workspace;
+}
+
+/* Shows only the current workspace's windows; focus is left to the caller. */
+static void show_workspace(struct sh_server *server, int workspace) {
+    server->workspace = workspace;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        wlr_scene_node_set_enabled(&toplevel->scene_tree->node, toplevel_visible(toplevel));
+    }
+    wlr_log(WLR_INFO, "Workspace %d", workspace + 1);
+}
+
 static void deactivate_toplevel(struct sh_server *server) {
     if (!server->focused_toplevel)
         return;
@@ -362,6 +388,11 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
         return;
     struct sh_server *server = toplevel->server;
     struct wlr_seat *seat = server->seat;
+    if (toplevel->workspace != server->workspace) {
+        if (server->grabbed_toplevel)
+            reset_cursor_mode(server);
+        show_workspace(server, toplevel->workspace);
+    }
     deactivate_toplevel(server);
     server->focused_layer = NULL;
     server->focused_toplevel = toplevel;
@@ -390,7 +421,7 @@ static void focus_previous(struct sh_server *server) {
     server->focused_layer = NULL;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (!toplevel->minimized) {
+        if (toplevel_visible(toplevel)) {
             focus_toplevel(toplevel);
             return;
         }
@@ -446,6 +477,95 @@ static void arrange_windows(struct sh_server *server, enum sh_action action);
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges);
 
+/* The window keyboard actions apply to: the focused one, else the topmost visible. */
+static struct sh_toplevel *current_toplevel(struct sh_server *server) {
+    if (server->focused_toplevel)
+        return server->focused_toplevel;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel_visible(toplevel))
+            return toplevel;
+    }
+    return NULL;
+}
+
+static void switch_workspace(struct sh_server *server, int workspace) {
+    int count = server->callbacks->settings(server->callbacks->userdata)->workspaces;
+    if (workspace < 0 || workspace >= count || workspace == server->workspace)
+        return;
+    if (server->grabbed_toplevel)
+        reset_cursor_mode(server);
+    deactivate_toplevel(server);
+    show_workspace(server, workspace);
+    focus_previous(server);
+}
+
+static void move_to_workspace(struct sh_server *server, int workspace) {
+    struct sh_toplevel *toplevel = current_toplevel(server);
+    int count = server->callbacks->settings(server->callbacks->userdata)->workspaces;
+    if (!toplevel || workspace < 0 || workspace >= count || workspace == toplevel->workspace)
+        return;
+    if (server->grabbed_toplevel == toplevel)
+        reset_cursor_mode(server);
+    toplevel->workspace = workspace;
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+    if (server->focused_toplevel == toplevel) {
+        deactivate_toplevel(server);
+        focus_previous(server);
+    }
+}
+
+/* Shared by key bindings and the control socket. */
+static void run_action(struct sh_server *server, enum sh_action action, int argument) {
+    int count = server->callbacks->settings(server->callbacks->userdata)->workspaces;
+    struct sh_toplevel *current = current_toplevel(server);
+    switch (action) {
+    case SH_NONE:
+    case SH_HANDLED:
+        break;
+    case SH_QUIT:
+        wl_display_terminate(server->wl_display);
+        break;
+    case SH_RELOAD:
+        reload_config(server);
+        break;
+    case SH_CYCLE: {
+        // Raise the least recently focused visible window.
+        struct sh_toplevel *toplevel;
+        wl_list_for_each_reverse(toplevel, &server->toplevels, link) {
+            if (toplevel != current && toplevel_visible(toplevel)) {
+                focus_toplevel(toplevel);
+                break;
+            }
+        }
+        break;
+    }
+    case SH_FULLSCREEN:
+        if (current)
+            set_fullscreen(current, !current->fullscreen);
+        break;
+    case SH_CLOSE:
+        if (current)
+            toplevel_close(current);
+        break;
+    case SH_WORKSPACE:
+        switch_workspace(server, argument - 1);
+        break;
+    case SH_MOVE_TO_WORKSPACE:
+        move_to_workspace(server, argument - 1);
+        break;
+    case SH_WORKSPACE_NEXT:
+        switch_workspace(server, (server->workspace + 1) % count);
+        break;
+    case SH_WORKSPACE_PREV:
+        switch_workspace(server, (server->workspace + count - 1) % count);
+        break;
+    default:
+        arrange_windows(server, action);
+        break;
+    }
+}
+
 static bool handle_keybinding(struct sh_server *server, uint32_t modifiers, xkb_keysym_t sym) {
 #if WLR_HAS_SESSION
     if (server->session && sym >= XKB_KEY_XF86Switch_VT_1 && sym <= XKB_KEY_XF86Switch_VT_12) {
@@ -455,40 +575,12 @@ static bool handle_keybinding(struct sh_server *server, uint32_t modifiers, xkb_
 #endif
     if (server->locked)
         return false; // Every other key belongs to the lock screen.
-    enum sh_action action = server->callbacks->key(server->callbacks->userdata, modifiers, sym);
-    switch (action) {
-    case SH_NONE:
+    int argument = 0;
+    enum sh_action action =
+        server->callbacks->key(server->callbacks->userdata, modifiers, sym, &argument);
+    if (action == SH_NONE)
         return false;
-    case SH_HANDLED:
-        break;
-    case SH_QUIT:
-        wl_display_terminate(server->wl_display);
-        break;
-    case SH_RELOAD:
-        reload_config(server);
-        break;
-    case SH_CYCLE:
-        if (wl_list_length(&server->toplevels) > 1) {
-            struct sh_toplevel *next = wl_container_of(server->toplevels.prev, next, link);
-            focus_toplevel(next);
-        }
-        break;
-    case SH_FULLSCREEN:
-        if (!wl_list_empty(&server->toplevels)) {
-            struct sh_toplevel *focused = wl_container_of(server->toplevels.next, focused, link);
-            set_fullscreen(focused, !focused->fullscreen);
-        }
-        break;
-    case SH_CLOSE:
-        if (!wl_list_empty(&server->toplevels)) {
-            struct sh_toplevel *focused = wl_container_of(server->toplevels.next, focused, link);
-            toplevel_close(focused);
-        }
-        break;
-    default:
-        arrange_windows(server, action);
-        break;
-    }
+    run_action(server, action, argument);
     return true;
 }
 
@@ -509,6 +601,15 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
     if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
         for (int i = 0; i < nsyms && !handled; ++i)
             handled = handle_keybinding(server, modifiers, syms[i]);
+        if (!handled) {
+            xkb_layout_index_t layout =
+                xkb_state_key_get_layout(keyboard->wlr_keyboard->xkb_state, keycode);
+            const xkb_keysym_t *raw;
+            int nraw = xkb_keymap_key_get_syms_by_level(keyboard->wlr_keyboard->keymap, keycode,
+                                                        layout, 0, &raw);
+            for (int i = 0; i < nraw && !handled; ++i)
+                handled = handle_keybinding(server, modifiers, raw[i]);
+        }
         if (event->keycode <= KEY_MAX)
             keyboard->consumed[event->keycode] = handled;
     } else if (event->keycode <= KEY_MAX) {
@@ -999,6 +1100,17 @@ static void reload_config(struct sh_server *server) {
             wlr_log(WLR_ERROR, "Could not apply reloaded keymap");
     }
     update_backgrounds(server);
+    int count = server->callbacks->settings(server->callbacks->userdata)->workspaces;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel->workspace >= count)
+            toplevel->workspace = count - 1;
+    }
+    if (server->workspace >= count) {
+        deactivate_toplevel(server);
+        show_workspace(server, count - 1);
+        focus_previous(server);
+    }
 }
 
 static void refit_fullscreen(struct sh_server *server);
@@ -1127,9 +1239,9 @@ static struct wlr_output *toplevel_output(struct sh_toplevel *toplevel) {
 }
 
 static void arrange_windows(struct sh_server *server, enum sh_action action) {
-    if (wl_list_empty(&server->toplevels))
+    struct sh_toplevel *focused = current_toplevel(server);
+    if (!focused)
         return;
-    struct sh_toplevel *focused = wl_container_of(server->toplevels.next, focused, link);
     if (focused->fullscreen)
         set_fullscreen(focused, false);
     if (action == SH_RESTORE) {
@@ -1151,11 +1263,13 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     int count = 0, index = 0;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel_output(toplevel) == output && !toplevel->minimized && !toplevel->fullscreen)
+        if (toplevel_output(toplevel) == output && toplevel_visible(toplevel) &&
+            !toplevel->fullscreen)
             ++count;
     }
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel_output(toplevel) != output || toplevel->minimized || toplevel->fullscreen)
+        if (toplevel_output(toplevel) != output || !toplevel_visible(toplevel) ||
+            toplevel->fullscreen)
             continue;
         if (sh_placement(action, area, gap, index++, count, &target))
             place_toplevel(toplevel, action, target);
@@ -1166,22 +1280,25 @@ static void reflow_output(struct sh_server *server, struct wlr_output *output) {
     struct wlr_box box;
     usable_area(server, output, &box);
     struct sh_rect area = {box.x, box.y, box.width, box.height}, target;
-    int count = 0, index = 0;
-    int gap = server->callbacks->settings(server->callbacks->userdata)->gap;
-    struct sh_toplevel *toplevel;
-    wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel->arranged && !toplevel->minimized && !toplevel->fullscreen &&
-            toplevel_output(toplevel) == output && toplevel->arrangement == SH_TILE)
-            ++count;
-    }
-    wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (!toplevel->arranged || toplevel->minimized || toplevel->fullscreen ||
-            toplevel_output(toplevel) != output)
-            continue;
-        enum sh_action action = toplevel->arrangement;
-        if (sh_placement(action, area, gap, action == SH_TILE ? index++ : 0,
-                         action == SH_TILE ? count : 1, &target))
-            place_toplevel(toplevel, action, target);
+    const struct sh_settings *settings = server->callbacks->settings(server->callbacks->userdata);
+    for (int workspace = 0; workspace < settings->workspaces; ++workspace) {
+        int count = 0, index = 0;
+        struct sh_toplevel *toplevel;
+        wl_list_for_each(toplevel, &server->toplevels, link) {
+            if (toplevel->workspace == workspace && toplevel->arranged && !toplevel->minimized &&
+                !toplevel->fullscreen && toplevel_output(toplevel) == output &&
+                toplevel->arrangement == SH_TILE)
+                ++count;
+        }
+        wl_list_for_each(toplevel, &server->toplevels, link) {
+            if (toplevel->workspace != workspace || !toplevel->arranged || toplevel->minimized ||
+                toplevel->fullscreen || toplevel_output(toplevel) != output)
+                continue;
+            enum sh_action action = toplevel->arrangement;
+            if (sh_placement(action, area, settings->gap, action == SH_TILE ? index++ : 0,
+                             action == SH_TILE ? count : 1, &target))
+                place_toplevel(toplevel, action, target);
+        }
     }
 }
 
@@ -1400,6 +1517,7 @@ static void maximize_toplevel(struct sh_toplevel *toplevel, bool maximized) {
 }
 
 static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool maximized) {
+    toplevel->workspace = toplevel->server->workspace;
     int offset = 40 + 32 * (wl_list_length(&toplevel->server->toplevels) % 8);
     int x = offset, y = offset;
     bool resize = false;
@@ -2008,6 +2126,167 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
         create_popup(popup, parent->data);
 }
 
+/* Control socket: one newline-terminated request per connection, answered with
+ * "ok\n" plus any output, or "error: ...\n". Lives in the private runtime dir. */
+struct sh_control_client {
+    struct sh_server *server;
+    int fd;
+    struct wl_event_source *source;
+    size_t length;
+    char request[512];
+};
+
+static void control_reply(int fd, const char *text) {
+    size_t length = strlen(text);
+    while (length > 0) {
+        ssize_t written = write(fd, text, length);
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written <= 0)
+            return;
+        text += written;
+        length -= (size_t)written;
+    }
+}
+
+static void control_describe_windows(struct sh_server *server, int fd) {
+    control_reply(fd, "ok\n");
+    struct sh_toplevel *toplevel;
+    // workspace, focused, minimized, app_id, title — one window per line.
+    wl_list_for_each_reverse(toplevel, &server->toplevels, link) {
+        char line[1024];
+        const char *app_id = toplevel_app_id(toplevel), *title = toplevel_title(toplevel);
+        snprintf(line, sizeof(line), "%d\t%d\t%d\t%s\t%s\n", toplevel->workspace + 1,
+                 server->focused_toplevel == toplevel, toplevel->minimized, app_id ? app_id : "",
+                 title ? title : "");
+        for (char *c = line; c[0] && c[1]; ++c)
+            if (*c == '\n' || *c == '\r')
+                *c = ' ';
+        control_reply(fd, line);
+    }
+}
+
+static void control_handle(struct sh_server *server, int fd, const char *request) {
+    if (!strcmp(request, "get workspace")) {
+        char reply[32];
+        snprintf(reply, sizeof(reply), "ok\n%d\n", server->workspace + 1);
+        control_reply(fd, reply);
+        return;
+    }
+    if (!strcmp(request, "get windows")) {
+        control_describe_windows(server, fd);
+        return;
+    }
+    if (server->locked) {
+        control_reply(fd, "error: the session is locked\n");
+        return;
+    }
+    char error[256] = "";
+    int argument = 0;
+    enum sh_action action = server->callbacks->command(server->callbacks->userdata, request,
+                                                       &argument, error, sizeof(error));
+    if (action == SH_NONE) {
+        char reply[300];
+        snprintf(reply, sizeof(reply), "error: %s\n", error[0] ? error : "unknown request");
+        control_reply(fd, reply);
+        return;
+    }
+    run_action(server, action, argument);
+    control_reply(fd, "ok\n");
+}
+
+static void control_client_close(struct sh_control_client *client) {
+    wl_event_source_remove(client->source);
+    close(client->fd);
+    free(client);
+}
+
+static int control_client_readable(int fd, uint32_t mask, void *data) {
+    struct sh_control_client *client = data;
+    ssize_t count =
+        read(fd, client->request + client->length, sizeof(client->request) - 1 - client->length);
+    if (count < 0 && (errno == EAGAIN || errno == EINTR))
+        return 0;
+    if (count <= 0) {
+        control_client_close(client);
+        return 0;
+    }
+    client->length += (size_t)count;
+    client->request[client->length] = '\0';
+    char *newline = strchr(client->request, '\n');
+    if (!newline && client->length < sizeof(client->request) - 1)
+        return 0;
+    if (newline)
+        *newline = '\0';
+    // Replies are small; a blocking write keeps the protocol simple.
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+    if (newline)
+        control_handle(client->server, fd, client->request);
+    else
+        control_reply(fd, "error: request too long\n");
+    control_client_close(client);
+    return 0;
+}
+
+static int control_accept(int fd, uint32_t mask, void *data) {
+    struct sh_server *server = data;
+    int client_fd = accept4(fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    if (client_fd < 0)
+        return 0;
+    struct sh_control_client *client = calloc(1, sizeof(*client));
+    if (!client) {
+        close(client_fd);
+        return 0;
+    }
+    client->server = server;
+    client->fd = client_fd;
+    client->source = wl_event_loop_add_fd(wl_display_get_event_loop(server->wl_display), client_fd,
+                                          WL_EVENT_READABLE, control_client_readable, client);
+    if (!client->source) {
+        close(client_fd);
+        free(client);
+    }
+    return 0;
+}
+
+static void open_control_socket(struct sh_server *server, const char *wayland_socket) {
+    server->control_fd = -1;
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    if (!runtime || !*runtime ||
+        snprintf(server->control_path, sizeof(server->control_path), "%s/shaode.%s.sock", runtime,
+                 wayland_socket) >= (int)sizeof(server->control_path) ||
+        strlen(server->control_path) >= sizeof(address.sun_path)) {
+        wlr_log(WLR_ERROR, "No usable XDG_RUNTIME_DIR; control socket disabled");
+        server->control_path[0] = '\0';
+        return;
+    }
+    strcpy(address.sun_path, server->control_path);
+    unlink(server->control_path); // A stale socket from a crashed session.
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) < 0 || listen(fd, 8) < 0) {
+        wlr_log_errno(WLR_ERROR, "Cannot create control socket %s", server->control_path);
+        if (fd >= 0)
+            close(fd);
+        server->control_path[0] = '\0';
+        return;
+    }
+    server->control_fd = fd;
+    server->control_source = wl_event_loop_add_fd(wl_display_get_event_loop(server->wl_display), fd,
+                                                  WL_EVENT_READABLE, control_accept, server);
+    setenv("SHAODE_SOCKET", server->control_path, true);
+    wlr_log(WLR_INFO, "Control socket: %s", server->control_path);
+}
+
+static void close_control_socket(struct sh_server *server) {
+    if (server->control_source)
+        wl_event_source_remove(server->control_source);
+    if (server->control_fd >= 0)
+        close(server->control_fd);
+    if (server->control_path[0])
+        unlink(server->control_path);
+}
+
 static int terminate_signal(int signal_number, void *data) {
     struct sh_server *server = data;
     wl_display_terminate(server->wl_display);
@@ -2167,6 +2446,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     }
 
     setenv("WAYLAND_DISPLAY", socket, true);
+    open_control_socket(&server, socket);
     setenv("XDG_CURRENT_DESKTOP", "shaoDe", true);
     setenv("XDG_SESSION_TYPE", "wayland", true);
     unsetenv("DISPLAY");
@@ -2215,6 +2495,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
         wlr_xwayland_destroy(server.xwayland);
     }
 #endif
+    close_control_socket(&server);
     wl_display_destroy_clients(server.wl_display);
 
     wl_list_remove(&server.new_xdg_toplevel.link);

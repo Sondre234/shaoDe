@@ -1,11 +1,17 @@
 #include "shaode/config.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <signal.h>
 #include <spawn.h>
+#include <sstream>
 #include <stdexcept>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include <utility>
 
 extern char **environ;
@@ -67,14 +73,49 @@ struct Runtime {
     static const sh_settings *settings(void *data) {
         return &static_cast<Runtime *>(data)->config.settings;
     }
-    static sh_action key(void *data, uint32_t modifiers, uint32_t keysym) {
+    static sh_action key(void *data, uint32_t modifiers, uint32_t keysym, int *argument) {
         auto &self = *static_cast<Runtime *>(data);
         auto *binding = self.config.binding(modifiers, keysym);
         if (!binding)
             return SH_NONE;
         if (binding->action == SH_HANDLED)
             spawn(binding->command);
+        *argument = binding->workspace;
         return binding->action;
+    }
+    /* Control requests: "<action> [workspace]" or "spawn PROGRAM [ARGS...]". */
+    static sh_action command(void *data, const char *request, int *argument, char *error,
+                             size_t error_size) {
+        auto &self = *static_cast<Runtime *>(data);
+        std::istringstream stream(request);
+        std::vector<std::string> words{std::istream_iterator<std::string>(stream), {}};
+        try {
+            if (words.empty())
+                throw std::runtime_error("empty request");
+            sh_action action = shaode::parse_action(words[0]);
+            if (action == SH_HANDLED) {
+                if (words.size() < 2)
+                    throw std::runtime_error("spawn needs a program");
+                if (spawn({words.begin() + 1, words.end()}) < 0)
+                    throw std::runtime_error("cannot launch " + words[1]);
+                return action;
+            }
+            if (shaode::action_takes_workspace(action)) {
+                std::size_t used = 0;
+                int number = words.size() == 2 ? std::stoi(words[1], &used) : 0;
+                if (words.size() != 2 || used != words[1].size() || number < 1 ||
+                    number > self.config.settings.workspaces)
+                    throw std::runtime_error(words[0] + " needs a workspace from 1 to " +
+                                             std::to_string(self.config.settings.workspaces));
+                *argument = number;
+            } else if (words.size() != 1) {
+                throw std::runtime_error(words[0] + " takes no argument");
+            }
+            return action;
+        } catch (const std::exception &failure) {
+            std::snprintf(error, error_size, "%s", failure.what());
+            return SH_NONE;
+        }
     }
     static bool reload(void *data) {
         auto &self = *static_cast<Runtime *>(data);
@@ -114,6 +155,50 @@ std::filesystem::path default_config() {
     throw std::runtime_error(
         "no configuration found; use --config config/init.lua from the source directory");
 }
+/* `shaode msg ...` sends one request to the running compositor's control socket. */
+int send_message(int argc, char **argv) {
+    std::string request;
+    for (int i = 2; i < argc; ++i)
+        request += (i > 2 ? " " : "") + std::string(argv[i]);
+    if (request.empty() || request.find('\n') != std::string::npos)
+        throw std::runtime_error("usage: shaode msg ACTION [ARGUMENT] | get workspace|windows");
+    const char *path = std::getenv("SHAODE_SOCKET");
+    if (!path || !*path)
+        throw std::runtime_error("SHAODE_SOCKET is not set; run inside a shaoDe session");
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    if (std::strlen(path) >= sizeof(address.sun_path))
+        throw std::runtime_error("control socket path is too long");
+    std::strcpy(address.sun_path, path);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0 || connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) < 0) {
+        if (fd >= 0)
+            close(fd);
+        throw std::runtime_error(std::string("cannot connect to ") + path + ": " +
+                                 std::strerror(errno));
+    }
+    request += '\n';
+    for (size_t sent = 0; sent < request.size();) {
+        ssize_t written = write(fd, request.data() + sent, request.size() - sent);
+        if (written <= 0) {
+            close(fd);
+            throw std::runtime_error("cannot send request");
+        }
+        sent += static_cast<size_t>(written);
+    }
+    std::string reply;
+    char buffer[4096];
+    for (ssize_t count; (count = read(fd, buffer, sizeof(buffer))) > 0;)
+        reply.append(buffer, static_cast<size_t>(count));
+    close(fd);
+    bool ok = reply.rfind("ok", 0) == 0;
+    auto body = reply.substr(std::min(reply.find('\n') + 1, reply.size()));
+    if (ok)
+        std::cout << body;
+    else
+        std::cerr << "shaode: " << (reply.empty() ? "no reply\n" : reply);
+    return ok ? 0 : 1;
+}
 void usage() {
     std::cout
         << "Usage: shaode [--config PATH] [--check-config] [--headless | --session] [--exec "
@@ -124,7 +209,9 @@ void usage() {
            "Falls back to the installed default; use --config config/init.lua in the source tree.\n"
            "--no-shell disables automatic shell startup. Headless mode never starts it "
            "automatically.\n"
-           "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n";
+           "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n"
+           "shaode msg ACTION [ARGUMENT] runs an action in the running session;\n"
+           "shaode msg get workspace|windows prints its state.\n";
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -134,6 +221,8 @@ int main(int argc, char **argv) {
         bool no_shell = false;
         sh_backend_mode mode = SH_BACKEND_NESTED;
         shaode::Command command;
+        if (argc >= 2 && std::string(argv[1]) == "msg")
+            return send_message(argc, argv);
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--help" || arg == "-h") {
@@ -178,8 +267,9 @@ int main(int argc, char **argv) {
              (std::getenv("DISPLAY") && *std::getenv("DISPLAY"))))
             throw std::runtime_error("start --session from a TTY or a display manager, outside an "
                                      "existing graphical session");
-        const sh_callbacks callbacks{&runtime,        Runtime::settings, Runtime::key,
-                                     Runtime::reload, Runtime::startup,  Runtime::child_exited};
+        const sh_callbacks callbacks{
+            &runtime,        Runtime::settings, Runtime::key,         Runtime::command,
+            Runtime::reload, Runtime::startup,  Runtime::child_exited};
         int result = sh_run(&callbacks, mode);
         if (runtime.shell_pid > 0)
             kill(runtime.shell_pid, SIGTERM);

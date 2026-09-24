@@ -8,7 +8,7 @@ return {
     appearance = { background = "#19212e" },
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
-    layout = { gap = 8 },
+    layout = { gap = 8, workspaces = 4 },
     xwayland = true, -- run X11 applications; Xwayland starts on first use (restart to change)
     shell = {
         enabled = true,
@@ -34,7 +34,17 @@ return {
         { mods = { mod }, key = "t", action = "tile" },
         { mods = { mod }, key = "F11", action = "fullscreen" },
         -- Lock with any ext-session-lock client, e.g.:
-        -- { mods = { "Logo" }, key = "l", action = "spawn", command = { "swaylock" } },
+        -- { mods = { "Super" }, key = "l", action = "spawn", command = { "swaylock" } },
+        { mods = { "Ctrl", mod }, key = "Right", action = "workspace_next" },
+        { mods = { "Ctrl", mod }, key = "Left", action = "workspace_prev" },
+        { mods = { "Ctrl", mod }, key = "1", action = "workspace", workspace = 1 },
+        { mods = { "Ctrl", mod }, key = "2", action = "workspace", workspace = 2 },
+        { mods = { "Ctrl", mod }, key = "3", action = "workspace", workspace = 3 },
+        { mods = { "Ctrl", mod }, key = "4", action = "workspace", workspace = 4 },
+        { mods = { "Ctrl", mod, "Shift" }, key = "1", action = "move_to_workspace", workspace = 1 },
+        { mods = { "Ctrl", mod, "Shift" }, key = "2", action = "move_to_workspace", workspace = 2 },
+        { mods = { "Ctrl", mod, "Shift" }, key = "3", action = "move_to_workspace", workspace = 3 },
+        { mods = { "Ctrl", mod, "Shift" }, key = "4", action = "move_to_workspace", workspace = 4 },
         { mods = { mod, "Shift" }, key = "r", action = "reload" },
         { mods = { mod, "Shift" }, key = "Escape", action = "quit" },
     },

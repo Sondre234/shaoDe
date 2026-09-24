@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     try {
         require(argc == 2, "example config path required");
         auto config = shaode::load_config(argv[1]);
-        require(config.bindings.size() == 11, "example shortcuts missing");
+        require(config.bindings.size() == 21, "example shortcuts missing");
         require(config.shell.enabled && config.shell.panel_height == 52 &&
                     config.shell.launchers.size() == 2,
                 "example shell settings missing");
@@ -32,6 +32,19 @@ int main(int argc, char **argv) {
         require(!config.binding(SH_ALT | SH_CTRL, XKB_KEY_Return), "extra modifiers matched");
         auto *fullscreen = config.binding(SH_ALT, XKB_KEY_F11);
         require(fullscreen && fullscreen->action == SH_FULLSCREEN, "fullscreen binding missing");
+        auto *move = config.binding(SH_CTRL | SH_ALT | SH_SHIFT, XKB_KEY_3);
+        require(move && move->action == SH_MOVE_TO_WORKSPACE && move->workspace == 3,
+                "move-to-workspace binding missing");
+        require(config.settings.workspaces == 4, "example workspace count changed");
+        require(shaode::parse_action("workspace_next") == SH_WORKSPACE_NEXT,
+                "control action names differ from Lua");
+        rejects("return {bindings={{mods={'Alt'},key='1',action='workspace'}}}");
+        rejects("return {bindings={{mods={'Alt'},key='1',action='workspace',workspace=5}}}");
+        rejects("return {layout={workspaces=2},bindings={{mods={'Alt'},key='1',"
+                "action='move_to_workspace',workspace=3}}}");
+        rejects("return {bindings={{mods={'Alt'},key='1',action='close',workspace=1}}}");
+        rejects("return {layout={workspaces=0}}");
+        rejects("return {layout={workspaces=11}}");
         auto computed = shaode::parse_config("local gap = 3; return {layout={gap=gap*2}}");
         require(computed.settings.gap == 6, "Lua evaluation failed");
         rejects("return {layout={gap=-1}}");
@@ -59,7 +72,7 @@ int main(int argc, char **argv) {
             config = shaode::parse_config("return {layout={gap=999}}");
         } catch (const std::exception &) {
         }
-        require(config.settings.gap == 8 && config.bindings.size() == 11,
+        require(config.settings.gap == 8 && config.bindings.size() == 21,
                 "failed reload changed active configuration");
         std::cout << "Configuration validation, bindings, and transactional loading passed\n";
     } catch (const std::exception &error) {

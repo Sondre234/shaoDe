@@ -138,6 +138,14 @@ sh_action action(const std::string &name) {
         return SH_RELOAD;
     if (name == "fullscreen")
         return SH_FULLSCREEN;
+    if (name == "workspace")
+        return SH_WORKSPACE;
+    if (name == "move_to_workspace")
+        return SH_MOVE_TO_WORKSPACE;
+    if (name == "workspace_next")
+        return SH_WORKSPACE_NEXT;
+    if (name == "workspace_prev")
+        return SH_WORKSPACE_PREV;
     fail("unknown action '" + name + "'");
 }
 
@@ -250,8 +258,9 @@ Config read(lua_State *L) {
     lua_getfield(L, -1, "layout");
     if (!lua_isnil(L, -1)) {
         table(L, -1, "layout");
-        keys(L, -1, {"gap"});
+        keys(L, -1, {"gap", "workspaces"});
         config.settings.gap = integer(L, "gap", 8, 0, 100);
+        config.settings.workspaces = integer(L, "workspaces", 4, 1, 10);
     }
     lua_pop(L, 1);
     lua_getfield(L, -1, "bindings");
@@ -260,7 +269,7 @@ Config read(lua_State *L) {
         for (size_t i = 1; i <= size; ++i) {
             lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
             table(L, -1, "binding");
-            keys(L, -1, {"mods", "key", "action", "command"});
+            keys(L, -1, {"mods", "key", "action", "command", "workspace"});
             Binding binding{};
             auto key = field(L, "key");
             binding.keysym =
@@ -285,6 +294,16 @@ Config read(lua_State *L) {
             else if (!lua_isnil(L, -1))
                 fail("command is only valid with spawn");
             lua_pop(L, 1);
+            if (action_takes_workspace(binding.action)) {
+                binding.workspace = integer(L, "workspace", 0, 1, config.settings.workspaces);
+                if (binding.workspace == 0)
+                    fail("workspace actions need a workspace number");
+            } else {
+                lua_getfield(L, -1, "workspace");
+                if (!lua_isnil(L, -1))
+                    fail("workspace is only valid with workspace actions");
+                lua_pop(L, 1);
+            }
             if (config.binding(binding.modifiers, binding.keysym))
                 fail("duplicate keyboard binding");
             config.bindings.push_back(std::move(binding));
@@ -318,6 +337,12 @@ Config read(lua_State *L) {
     return config;
 }
 } // namespace
+
+sh_action parse_action(const std::string &name) { return action(name); }
+
+bool action_takes_workspace(sh_action action) {
+    return action == SH_WORKSPACE || action == SH_MOVE_TO_WORKSPACE;
+}
 
 const Binding *Config::binding(uint32_t modifiers, uint32_t keysym) const {
     constexpr uint32_t relevant = SH_SHIFT | SH_CTRL | SH_ALT | SH_LOGO;

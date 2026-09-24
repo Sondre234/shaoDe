@@ -63,6 +63,9 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Alt + Up/Down | Maximize / restore saved floating geometry |
 | Alt + T | Arrange the current output's windows in a grid |
 | Alt + F11 | Toggle fullscreen |
+| Ctrl + Alt + 1–4 | Switch to workspace 1–4 |
+| Ctrl + Alt + Shift + 1–4 | Move the focused window to workspace 1–4 |
+| Ctrl + Alt + Left/Right | Previous / next workspace |
 | Alt + Shift + R | Reload Lua configuration |
 | Alt + Shift + Escape | Exit the nested compositor |
 
@@ -75,7 +78,18 @@ tiling; snapping is keyboard-driven, without edge-drag previews. Decorations
 come from clients. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
-client's next buffer. There are no workspaces or portal integration yet.
+client's next buffer. There is no portal integration yet.
+
+Workspaces are shared across outputs; `layout.workspaces` sets how many (1–10).
+The taskbar lists windows from every workspace, and activating one switches to its
+workspace. Window shortcuts act only on the current workspace.
+
+A control socket runs any Lua action from scripts or other tools:
+`shaode msg workspace 2`, `shaode msg tile`, `shaode msg spawn foot`. The query
+`shaode msg get workspace` prints the current workspace, and `shaode msg get windows`
+prints one tab-separated line per window: workspace, focused, minimized, app ID, and
+title. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
+refused while the session is locked.
 
 Screen locking uses the standard `ext-session-lock-v1` protocol, so lockers such
 as swaylock or gtklock work; bind one with a `spawn` action. The desktop is covered
