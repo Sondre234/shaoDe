@@ -1615,12 +1615,28 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
     if (toplevel->fullscreen)
         return;
 
+    bool was_arranged = toplevel->arranged;
     toplevel->arranged = false;
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
     toplevel_set_states(toplevel, false, 0);
     server->grabbed_toplevel = toplevel;
     server->cursor_mode = mode;
+
+    if (mode == SH_CURSOR_MOVE && was_arranged) {
+        /* Dragging a maximized or snapped window restores its floating size, keeping the
+         * pointer at the same relative spot across the width and at most as far down. */
+        struct wlr_box geometry = toplevel_geometry(toplevel);
+        struct wlr_box restore = toplevel->restore_box;
+        double from_left = server->cursor->x - toplevel->scene_tree->node.x;
+        double from_top = server->cursor->y - toplevel->scene_tree->node.y;
+        if (geometry.width > 0)
+            from_left = from_left * restore.width / geometry.width;
+        if (from_top > restore.height)
+            from_top = restore.height / 2.0;
+        toplevel_configure(toplevel, server->cursor->x - from_left, server->cursor->y - from_top,
+                           restore.width, restore.height);
+    }
 
     if (mode == SH_CURSOR_MOVE) {
         server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
