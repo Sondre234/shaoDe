@@ -1252,7 +1252,11 @@ static int reload_signal(int signal_number, void *data) {
     return 0;
 }
 static int reap_children(int signal_number, void *data) {
-    while (waitpid(-1, NULL, WNOHANG) > 0) {
+    struct sh_server *server = data;
+    pid_t pid;
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+        if (server->callbacks->child_exited)
+            server->callbacks->child_exited(server->callbacks->userdata, pid);
     }
     return 0;
 }
@@ -1384,6 +1388,8 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     }
 
     setenv("WAYLAND_DISPLAY", socket, true);
+    setenv("XDG_CURRENT_DESKTOP", "shaoDe", true);
+    setenv("XDG_SESSION_TYPE", "wayland", true);
     unsetenv("DISPLAY");
     server.running = true;
     callbacks->startup(callbacks->userdata);

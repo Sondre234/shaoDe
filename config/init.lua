@@ -9,6 +9,18 @@ return {
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
     layout = { gap = 8 },
+    shell = {
+        enabled = true,
+        panel_height = 52,
+        accent = "#7da8ff",
+        panel_color = "#151e2c",
+        text_color = "#edf2fa",
+        wallpaper = "", -- absolute path, or relative to this configuration file
+        launchers = {
+            { name = "Terminal", icon = "utilities-terminal", command = { "kitty" } },
+            { name = "Home", icon = "user-home", command = { "xdg-open", "." } },
+        },
+    },
     startup = {}, -- e.g. { { "kitty" } }
     bindings = {
         { mods = { mod }, key = "Return", action = "spawn", command = { "kitty" } },

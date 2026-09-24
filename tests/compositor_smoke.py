@@ -8,7 +8,8 @@ import sys
 import tempfile
 import time
 
-compositor, probe, example = map(lambda p: str(Path(p).resolve()), sys.argv[1:])
+compositor, probe, example = map(lambda p: str(Path(p).resolve()), sys.argv[1:4])
+task_model_test = str(Path(sys.argv[4]).resolve()) if len(sys.argv) > 4 else None
 
 # Reject standalone mode inside a GUI before attempting device/session access.
 for arguments, expected in [
@@ -47,6 +48,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-test-") as directory:
             env["WAYLAND_DISPLAY"] = socket
             for _ in range(3):
                 subprocess.run([probe], env=env, check=True, timeout=10)
+            if task_model_test:
+                subprocess.run([task_model_test, probe], env=env, check=True, timeout=15)
             config.write_text("return {appearance={background='#315071'}, layout={gap=12}}")
             process.send_signal(signal.SIGHUP)
             wait_for(lambda: "Configuration reloaded" in log.read_text(), process, "valid reload")

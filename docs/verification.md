@@ -50,7 +50,7 @@ repository's automated tests do not control the user's desktop.
 
 Physical-device testing, hotplug, multi-monitor behavior, fractional scaling,
 clipboard interoperability, client-side title-bar grabs, and extended soak tests
-remain. The initial desktop has no shell UI, workspaces, persistent tiling,
+remain. The compositor checkpoint did not include shell UI, workspaces, persistent tiling,
 fullscreen handling, XWayland, portals, or session locking. Interactive resize
 positions are applied before clients submit their replacement buffers. This is
 a development checkpoint for nested use, not a complete desktop session.
@@ -65,3 +65,23 @@ The headless protocol probe now maps an actual layer-shell panel with a
 It also receives the window title through foreign-toplevel-management and
 exercises minimize, restore/activate, close, and handle removal after unmapping.
 The integration test repeats those operations across configuration reloads.
+
+## Qt shell preview checkpoint
+
+On 2026-09-24, the preview build compiles with Qt 6.11.2 and GIO 2.88.3. CTest
+renders the taskbar/launcher and desktop QML into PNGs with the offscreen software
+backend, using an isolated application directory. Both previews were also
+visually inspected. Configuration tests cover shell colors, height, wallpaper,
+launchers, and malformed values. The compositor-only build remains supported.
+
+The shell's actual Qt task model also connects to the headless compositor and
+controls a real xdg-shell client. Its test verifies title/app ID, active state,
+click-to-minimize, restore/activate, maximize/restore, show desktop, close, and
+row removal. Stale task IDs after closing a window are harmless. All five CTest
+checks pass in the preview build.
+
+LayerShellQt is not installed on the development host yet, so the live shell
+branch has not been compiled or run. Mouse interaction with the live taskbar,
+output lifecycle, panel reservation through Qt, and shell startup/reload need
+integration testing.
+The lower-level compositor protocols are tested separately as described above.

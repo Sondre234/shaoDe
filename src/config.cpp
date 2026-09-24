@@ -138,6 +138,62 @@ sh_action action(const std::string &name) {
         return SH_RELOAD;
     fail("unknown action '" + name + "'");
 }
+
+void read_shell(lua_State *L, ShellConfig &shell) {
+    lua_getfield(L, -1, "shell");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    table(L, -1, "shell");
+    keys(L, -1,
+         {"enabled", "panel_height", "accent", "panel_color", "text_color", "wallpaper",
+          "launchers"});
+    lua_getfield(L, -1, "enabled");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isboolean(L, -1))
+            fail("shell.enabled must be a boolean");
+        shell.enabled = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
+    shell.panel_height = integer(L, "panel_height", 52, 32, 100);
+    for (auto [key, target] : {std::pair{"accent", &shell.accent},
+                               {"panel_color", &shell.panel_color},
+                               {"text_color", &shell.text_color},
+                               {"wallpaper", &shell.wallpaper}}) {
+        lua_getfield(L, -1, key);
+        if (!lua_isnil(L, -1)) {
+            *target = string(L, -1, key);
+            if (target != &shell.wallpaper &&
+                (target->size() != 7 || (*target)[0] != '#' ||
+                 target->find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos))
+                fail(std::string(key) + " must be #RRGGBB");
+        }
+        lua_pop(L, 1);
+    }
+    lua_getfield(L, -1, "launchers");
+    if (!lua_isnil(L, -1)) {
+        auto size = array_size(L, -1, 64);
+        for (size_t i = 1; i <= size; ++i) {
+            lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
+            table(L, -1, "launcher");
+            keys(L, -1, {"name", "icon", "command"});
+            Launcher launcher;
+            launcher.name = field(L, "name");
+            if (launcher.name.empty() || launcher.name.size() > 128)
+                fail("launcher name must have 1 to 128 bytes");
+            lua_getfield(L, -1, "icon");
+            launcher.icon = lua_isnil(L, -1) ? "application-x-executable" : string(L, -1, "icon");
+            lua_pop(L, 1);
+            lua_getfield(L, -1, "command");
+            launcher.command = command(L);
+            lua_pop(L, 1);
+            shell.launchers.push_back(std::move(launcher));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 2);
+}
 void instruction_limit(lua_State *L, lua_Debug *) {
     auto *remaining = static_cast<int *>(lua_getextraspace(L));
     if (--*remaining <= 0)
@@ -146,7 +202,9 @@ void instruction_limit(lua_State *L, lua_Debug *) {
 Config read(lua_State *L) {
     Config config;
     table(L, -1, "configuration result");
-    keys(L, -1, {"version", "appearance", "keyboard", "mouse", "layout", "bindings", "startup"});
+    keys(L, -1,
+         {"version", "appearance", "keyboard", "mouse", "layout", "bindings", "startup", "shell"});
+    read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
     lua_getfield(L, -1, "appearance");

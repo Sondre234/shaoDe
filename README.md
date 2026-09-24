@@ -2,7 +2,8 @@
 
 A mouse-first Wayland desktop with Lua configuration, floating windows,
 edge snapping, and optional tiling. C++ owns configuration and desktop policy;
-a C adapter integrates wlroots. A Qt Quick desktop shell is planned.
+a C adapter integrates wlroots. A Qt Quick shell adds a desktop, taskbar, and
+searchable application launcher.
 
 This is an early development project, not a replacement desktop session yet.
 
@@ -11,11 +12,14 @@ This is an early development project, not a replacement desktop session yet.
 The first working compositor supports real Wayland applications, click-to-focus,
 mouse move/resize, configurable shortcuts, half-screen snapping, maximize/restore,
 a one-shot grid arrangement, and Lua reload. It uses a TinyWL-derived C adapter
-with C++ configuration and placement policy. The Qt shell is not implemented yet.
+with C++ configuration and placement policy. The shell is under development:
+its UI renders in preview mode; live LayerShellQt integration is awaiting testing.
 
 Requirements: CMake 3.25+, C11 and C++20 compilers, pkg-config, Lua 5.4,
 xkbcommon, wlroots **0.20.x**, wayland-server, wayland-protocols, and
-wayland-scanner. Tests also use Python 3 and wayland-client. Ninja is used below.
+wayland-scanner. The shell also needs Qt 6.5+ (Core, Gui, Qml, Quick, Quick Controls
+Basic, Quick Layouts, and the Wayland platform plugin), LayerShellQt 6.6+, GLib/GIO,
+and wayland-client. Tests use Python 3. Ninja is used below.
 Gentoo setup and standalone-session instructions are in [docs/gentoo.md](docs/gentoo.md).
 The build supports a normal install prefix and DESTDIR staging.
 
@@ -34,8 +38,18 @@ backend is experimental and has not yet been hardware-tested. Session-file
 installation is opt-in with `SHAODE_INSTALL_SESSION=ON`.
 Applications launched through `--exec`, startup entries, or bindings inherit
 the nested Wayland socket. Commands after `--exec` consume all remaining
-arguments; there is no shell expansion. No applications start automatically
-with the example configuration.
+arguments; there is no shell expansion. Full builds start the desktop shell
+automatically; `--no-shell` or Lua `shell.enabled = false` disables it. Headless
+mode never starts the shell automatically. No other applications start
+automatically with the example configuration.
+
+The shell has pinned desktop shortcuts (double-click to launch), a taskbar with
+window activation/minimization and a right-click window menu, an application
+search menu, a clock, and a show-desktop button. Installed applications are read
+from desktop entries through GIO. Lua configures panel height, colors, wallpaper,
+and pinned commands. Pinned commands run from your home directory. In a nested
+session, applications that reuse an existing process or D-Bus service can open
+in the host session instead.
 
 Default bindings (edit [config/init.lua](config/init.lua)):
 
@@ -59,7 +73,7 @@ Initial limitations: tiling is a one-shot arrangement, not persistent automatic
 tiling; snapping is keyboard-driven, without edge-drag previews. Decorations
 come from clients, and fullscreen requests are not yet implemented. Window
 placement during interactive resize is immediate, without waiting for the
-client's next buffer. There is no taskbar, launcher UI, workspaces, XWayland,
+client's next buffer. There are no workspaces, XWayland,
 lock screen, portal integration, or support for using this as a daily desktop.
 Lua currently configures the exposed settings/actions; custom layout functions
 and shell widgets are later work.
@@ -80,7 +94,23 @@ or overwrites a personal configuration automatically.
 CTest covers configuration validation, layout bounds/non-overlap, and a headless
 compositor with real xdg-shell clients. The integration test verifies mapping,
 frame callbacks, maximize/restore, unmapping, accepted/rejected reloads, and clean
-shutdown in an isolated temporary runtime directory. No display session is needed.
+shutdown in an isolated temporary runtime directory. Shell builds also render
+both QML surfaces using Qt's offscreen software backend. No display session is needed.
+
+To build the compositor without Qt, add `-DSHAODE_BUILD_SHELL=OFF`. To work on
+the shell UI without LayerShellQt, use an explicit preview build:
+
+```sh
+cmake -S . -B build-preview -G Ninja -DSHAODE_SHELL_PREVIEW_ONLY=ON
+cmake --build build-preview
+ctest --test-dir build-preview --output-on-failure
+./build-preview/shaode-shell --config config/init.lua --preview
+./build-preview/shaode-shell --config config/init.lua --preview --preview-desktop
+```
+
+Preview builds do not install or automatically launch the shell. Preview windows
+show the UI and can launch applications, but do not manage windows or reserve
+space on the host desktop.
 
 To build only the configuration and placement tests without wlroots:
 
@@ -98,7 +128,8 @@ remaining limitations.
 1. **Done:** Lua configuration and native build foundation.
 2. **Done:** nested wlroots compositor: real applications, focus, move/resize, shortcuts,
    background, snapping, basic tiling, and reload.
-3. **Next:** Qt Quick shell: taskbar, launcher, desktop context menu, wallpaper and icons.
+3. **In progress:** Qt Quick shell: taskbar, launcher, desktop context menu, wallpaper
+   and icons. Preview rendering is verified; live shell verification is next.
 4. Persistent per-workspace tiling, drag-to-edge previews, window rules, and Lua
    extension APIs shared by mouse controls and shortcuts.
 5. Session integration: multi-monitor policy, XWayland, notifications, tray,

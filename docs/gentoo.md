@@ -14,6 +14,8 @@ between release series. Relevant Gentoo packages are:
 - `dev-lang/lua:5.4`
 - `dev-libs/wayland` and `dev-libs/wayland-protocols`
 - `dev-util/wayland-scanner` and `x11-libs/libxkbcommon`
+- `dev-qt/qtbase:6`, `dev-qt/qtdeclarative:6`, and `dev-qt/qtwayland:6`
+- `kde-plasma/layer-shell-qt:6` (6.6+) and `dev-libs/glib:2` for the desktop shell
 - `dev-build/cmake`, `dev-build/ninja`, and `virtual/pkgconfig`
 - A compiler supporting C11 and C++20
 - Python 3 for the automated tests; a Wayland terminal for interactive testing
@@ -29,8 +31,19 @@ For example, review these with Portage on the Gentoo machine:
 ```sh
 emerge --ask gui-libs/wlroots:0.20 dev-lang/lua:5.4 \
     dev-libs/wayland dev-libs/wayland-protocols dev-util/wayland-scanner \
-    x11-libs/libxkbcommon dev-build/cmake dev-build/ninja virtual/pkgconfig
+    x11-libs/libxkbcommon dev-build/cmake dev-build/ninja virtual/pkgconfig \
+    dev-qt/qtbase:6 dev-qt/qtdeclarative:6 dev-qt/qtwayland:6 \
+    kde-plasma/layer-shell-qt:6 dev-libs/glib:2
 ```
+
+The shell uses Qt Quick Controls' Basic style and Quick Layouts from
+[qtdeclarative](https://packages.gentoo.org/packages/dev-qt/qtdeclarative), the
+[Qt Wayland client platform](https://packages.gentoo.org/packages/dev-qt/qtwayland),
+and [LayerShellQt](https://packages.gentoo.org/packages/kde-plasma/layer-shell-qt).
+It does not require running Plasma. Use Qt with OpenGL/Wayland support for normal
+GPU rendering. An installed icon theme supplies application icons; missing icons
+have a built-in fallback. `xdg-open` and a file manager are optional for the Home
+shortcut; edit the Lua launcher commands to match your installed applications.
 
 These are instructions for the target machine; shaoDe's build does not run
 Portage, modify USE flags, install services, or alter your session configuration.
@@ -52,6 +65,13 @@ Replace `foot` with an installed Wayland terminal. Change the terminal command i
 example configuration when no personal config exists. To customize it, create
 `~/.config/shaode/init.lua` from the example; installation never overwrites this
 personal file. For a custom location use `--config /path/to/init.lua`.
+
+The normal build includes `shaode-shell` alongside `shaode`. For compositor-only
+development add `-DSHAODE_BUILD_SHELL=OFF`; Qt, GIO, and LayerShellQt are then
+unnecessary. `--no-shell` skips shell startup at runtime. Lua's `shell` table
+controls its colors, panel height, wallpaper path, and pinned launchers. Reload
+with Alt+Shift+R after editing the file. Invalid configuration retains the last
+working settings.
 
 `BUILD_TESTING=OFF` omits the test tools/Python requirement. `DESTDIR` staging and
 GNU install directories are supported for packaging. The display-manager session

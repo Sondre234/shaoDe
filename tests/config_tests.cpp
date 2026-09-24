@@ -20,6 +20,11 @@ int main(int argc, char **argv) {
         require(argc == 2, "example config path required");
         auto config = shaode::load_config(argv[1]);
         require(config.bindings.size() == 10, "example shortcuts missing");
+        require(config.shell.enabled && config.shell.panel_height == 52 &&
+                    config.shell.launchers.size() == 2,
+                "example shell settings missing");
+        require(config.shell.launchers.front().command == shaode::Command{"kitty"},
+                "pinned command arguments changed");
         auto *spawn = config.binding(SH_ALT, XKB_KEY_Return);
         require(spawn && spawn->command == shaode::Command{"kitty"}, "spawn argv mismatch");
         require(config.binding(SH_ALT | SH_SHIFT | 2, XKB_KEY_R)->action == SH_RELOAD,
@@ -32,6 +37,11 @@ int main(int argc, char **argv) {
         rejects("return {appearance={background='#oops00'}}");
         rejects("return {layuot={gap=2}}");
         rejects("return {version=2}");
+        rejects("return {shell={enabled='yes'}}");
+        rejects("return {shell={panel_height=0}}");
+        rejects("return {shell={accent='red'}}");
+        rejects("return {shell={launchers={{name='',command={'kitty'}}}}}");
+        rejects("return {shell={launchers={{name='Terminal',command='kitty'}}}}");
         rejects("return true");
         rejects("return {startup={{}}}");
         rejects("return {startup={{'kitty', [3]='bad'}}}");

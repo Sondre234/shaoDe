@@ -41,6 +41,7 @@ struct sh_callbacks {
     enum sh_action (*key)(void *, uint32_t modifiers, uint32_t keysym);
     bool (*reload)(void *);
     void (*startup)(void *);
+    void (*child_exited)(void *, int pid);
 };
 
 enum sh_backend_mode { SH_BACKEND_NESTED, SH_BACKEND_HEADLESS, SH_BACKEND_SESSION };

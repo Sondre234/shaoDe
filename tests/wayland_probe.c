@@ -37,7 +37,7 @@ struct probe {
     struct wl_callback *frame;
     struct buffer *buffers;
     int width, height, stage;
-    bool maximized, done;
+    bool maximized, done, external_control;
 };
 static void die(const char *message) {
     fprintf(stderr, "wayland probe: %s\n", message);
@@ -143,6 +143,8 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time) 
     struct probe *probe = data;
     wl_callback_destroy(callback);
     probe->frame = NULL;
+    if (probe->external_control)
+        return;
     if (probe->stage == 0) {
         puts("mapped and received frame");
         probe->stage = 1;
@@ -236,15 +238,19 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel, int32_
 }
 static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
     struct probe *probe = data;
-    if (probe->stage != 5)
+    if (!probe->external_control && probe->stage != 5)
         die("unexpected close request");
     puts("taskbar minimize, restore, activate, and close passed");
     probe->done = true;
 }
 static const struct xdg_toplevel_listener toplevel_listener = {.configure = toplevel_configure,
                                                                .close = toplevel_close};
-int main(void) {
+int main(int argc, char **argv) {
     struct probe probe = {.width = 320, .height = 240};
+    if (argc == 2 && !strcmp(argv[1], "--external-control"))
+        probe.external_control = true;
+    else if (argc != 1)
+        die("usage: wayland_probe [--external-control]");
     struct wl_display *display = wl_display_connect(NULL);
     if (!display)
         die("cannot connect to compositor");
