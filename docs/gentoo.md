@@ -104,7 +104,8 @@ dbus-run-session -- "$HOME/.local/bin/shaode" --session
 `--session` selects DRM and libinput explicitly. The default stays nested;
 `--headless` is for tests. Starting `--session` from an environment with `DISPLAY`
 or `WAYLAND_DISPLAY` set is rejected to avoid accidental session takeover.
-Ctrl+Alt+F1 through F12 request VT switching through wlroots/libseat; the Lua quit
+Ctrl+Alt+F1 through F12 request VT switching through wlroots/libseat (Ctrl+AltGr
+works too, for keyboards whose only Alt key is Right Alt); the Lua quit
 binding remains Alt+Shift+Escape. Do not launch the compositor with sudo.
 
 Switching to another VT pauses the session; wlroots removes every output until you

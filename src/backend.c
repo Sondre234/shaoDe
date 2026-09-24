@@ -574,10 +574,24 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
     }
 }
 
+#if WLR_HAS_SESSION
+// Returns the VT a key switches to, or 0. Ctrl+AltGr+Fn counts as Ctrl+Alt+Fn: some keyboards'
+// only Alt key is Right Alt, which AltGr layouts turn into Level3 instead of Alt.
+static unsigned vt_for_key(uint32_t modifiers, xkb_keysym_t sym) {
+    if (sym >= XKB_KEY_XF86Switch_VT_1 && sym <= XKB_KEY_XF86Switch_VT_12)
+        return sym - XKB_KEY_XF86Switch_VT_1 + 1;
+    if ((modifiers & WLR_MODIFIER_CTRL) && (modifiers & (WLR_MODIFIER_ALT | WLR_MODIFIER_MOD5)) &&
+        sym >= XKB_KEY_F1 && sym <= XKB_KEY_F12)
+        return sym - XKB_KEY_F1 + 1;
+    return 0;
+}
+#endif
+
 static bool handle_keybinding(struct sh_server *server, uint32_t modifiers, xkb_keysym_t sym) {
 #if WLR_HAS_SESSION
-    if (server->session && sym >= XKB_KEY_XF86Switch_VT_1 && sym <= XKB_KEY_XF86Switch_VT_12) {
-        wlr_session_change_vt(server->session, sym - XKB_KEY_XF86Switch_VT_1 + 1);
+    unsigned vt = vt_for_key(modifiers, sym);
+    if (server->session && vt) {
+        wlr_session_change_vt(server->session, vt);
         return true;
     }
 #endif
