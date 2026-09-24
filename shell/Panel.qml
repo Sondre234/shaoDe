@@ -6,6 +6,7 @@ Item {
     id: root
     property bool launcherOpen: false
     property int taskMenuId: -1
+    property real taskMenuX: 0
     property bool menuOpen: launcherOpen || taskMenuId >= 0
     onMenuOpenChanged: shellView.setExpanded(menuOpen)
     onLauncherOpenChanged: {
@@ -106,7 +107,7 @@ Item {
     Rectangle {
         visible: root.taskMenuId >= 0
         width: 220; height: 150
-        anchors.left: parent.left; anchors.leftMargin: 100
+        x: Math.max(8, Math.min(root.taskMenuX, root.width - width - 8))
         anchors.bottom: bar.top; anchors.bottomMargin: 8
         color: shell.panelColor; radius: 10
         border.color: Qt.lighter(shell.panelColor, 1.6)
@@ -193,7 +194,11 @@ Item {
                         Image { source: "image://icons/" + taskButton.appId; sourceSize: Qt.size(22, 22); Layout.preferredWidth: 22; Layout.preferredHeight: 22 }
                         Text { text: taskButton.title; color: shell.textColor; elide: Text.ElideRight; Layout.fillWidth: true; font.pixelSize: 12 }
                     }
-                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: { root.launcherOpen = false; root.taskMenuId = taskButton.taskId } }
+                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: {
+                        root.launcherOpen = false
+                        root.taskMenuX = taskButton.mapToItem(root, 0, 0).x
+                        root.taskMenuId = taskButton.taskId
+                    } }
                 }
             }
             Text {
