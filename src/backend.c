@@ -1172,6 +1172,48 @@ static void server_new_inhibitor(struct wl_listener *listener, void *data) {
     wlr_idle_notifier_v1_set_inhibited(server->idle_notifier, ++server->inhibitors > 0);
 }
 
+static void refit_fullscreen(struct sh_server *server);
+
+static bool output_named(const struct sh_output *output, const char *name) {
+    return strcmp(output->wlr_output->name, name) == 0;
+}
+
+static bool output_listed(const struct sh_settings *settings, const struct sh_output *output) {
+    for (int i = 0; i < settings->output_count; ++i) {
+        if (output_named(output, settings->output_order[i]))
+            return true;
+    }
+    return false;
+}
+
+/* Lays outputs side by side, top-aligned: configured order first, then the rest in the order
+ * they appeared. Shifts the row so the primary output starts at x = 0, where the cursor begins. */
+static void arrange_outputs(struct sh_server *server) {
+    const struct sh_settings *settings = server->callbacks->settings(server->callbacks->userdata);
+    int origin = 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        int x = 0;
+        struct sh_output *output;
+        for (int i = 0; i <= settings->output_count; ++i) {
+            wl_list_for_each_reverse(output, &server->outputs, link) {
+                if (i < settings->output_count ? !output_named(output, settings->output_order[i])
+                                               : output_listed(settings, output))
+                    continue;
+                if (pass == 0 && output_named(output, settings->primary_output))
+                    origin = x;
+                if (pass == 1)
+                    wlr_output_layout_add(server->output_layout, output->wlr_output, x - origin, 0);
+                int width, height;
+                wlr_output_effective_resolution(output->wlr_output, &width, &height);
+                x += width;
+            }
+        }
+    }
+    update_backgrounds(server);
+    arrange_layers(server);
+    refit_fullscreen(server);
+}
+
 static void reload_config(struct sh_server *server) {
     if (!server->callbacks->reload(server->callbacks->userdata))
         return;
@@ -1180,7 +1222,7 @@ static void reload_config(struct sh_server *server) {
         if (!configure_keyboard(server, keyboard->wlr_keyboard))
             wlr_log(WLR_ERROR, "Could not apply reloaded keymap");
     }
-    update_backgrounds(server);
+    arrange_outputs(server);
     int count = server->callbacks->settings(server->callbacks->userdata)->workspaces;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
@@ -1194,16 +1236,11 @@ static void reload_config(struct sh_server *server) {
     }
 }
 
-static void refit_fullscreen(struct sh_server *server);
-
 static void output_request_state(struct wl_listener *listener, void *data) {
     struct sh_output *output = wl_container_of(listener, output, request_state);
     const struct wlr_output_event_request_state *event = data;
-    if (wlr_output_commit_state(output->wlr_output, event->state)) {
-        update_backgrounds(output->server);
-        arrange_layers(output->server);
-        refit_fullscreen(output->server);
-    }
+    if (wlr_output_commit_state(output->wlr_output, event->state))
+        arrange_outputs(output->server);
 }
 
 static void output_destroy(struct wl_listener *listener, void *data) {
@@ -1230,6 +1267,8 @@ static void output_destroy(struct wl_listener *listener, void *data) {
     if (server->running && !standalone && wl_list_empty(&server->outputs))
         wl_display_terminate(server->wl_display);
     free(output);
+    if (server->running)
+        arrange_outputs(server);
     send_locked_if_presented(server);
 }
 
@@ -1283,13 +1322,12 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     wl_list_insert(&server->outputs, &output->link);
 
     struct wlr_output_layout_output *l_output =
-        wlr_output_layout_add_auto(server->output_layout, wlr_output);
+        wlr_output_layout_add(server->output_layout, wlr_output, 0, 0);
     struct wlr_scene_output *scene_output = wlr_scene_output_create(server->scene, wlr_output);
     wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
     if (wlr_output_is_wl(wlr_output))
         wlr_wl_output_set_title(wlr_output, "shaoDe — nested desktop");
-    update_backgrounds(server);
-    arrange_layers(server);
+    arrange_outputs(server);
 }
 
 /* Preserve the original floating rectangle across repeated snap operations. */

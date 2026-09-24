@@ -85,6 +85,12 @@ Workspaces are shared across outputs; `layout.workspaces` sets how many (1–10)
 The taskbar lists windows from every workspace, and activating one switches to its
 workspace. Window shortcuts act only on the current workspace.
 
+Monitors sit side by side, top-aligned. `outputs.order` lists connector names
+(such as `DP-3`) left to right; unlisted monitors follow on the right in the order
+they appear. `outputs.primary` puts that monitor at the layout origin, where the
+cursor starts. Each monitor runs its preferred resolution at the fastest refresh
+rate available for it.
+
 A control socket runs any Lua action from scripts or other tools:
 `shaode msg workspace 2`, `shaode msg tile`, `shaode msg spawn foot`. The query
 `shaode msg get workspace` prints the current workspace, and `shaode msg get windows`

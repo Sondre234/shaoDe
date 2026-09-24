@@ -36,6 +36,17 @@ int main(int argc, char **argv) {
         require(move && move->action == SH_MOVE_TO_WORKSPACE && move->workspace == 3,
                 "move-to-workspace binding missing");
         require(config.settings.workspaces == 4, "example workspace count changed");
+        auto outputs = shaode::parse_config(
+            "return {outputs={order={'HDMI-A-1','DP-3'},primary='DP-3'}}");
+        require(outputs.settings.output_count == 2 &&
+                    std::string(outputs.settings.output_order[1]) == "DP-3" &&
+                    std::string(outputs.settings.primary_output) == "DP-3",
+                "output order or primary not parsed");
+        rejects("return {outputs={order={'DP-1','DP-1'}}}");
+        rejects("return {outputs={order={''}}}");
+        rejects("return {outputs={order={'1','2','3','4','5','6','7','8','9'}}}");
+        rejects("return {outputs={primary=1}}");
+        rejects("return {outputs={position={}}}");
         require(shaode::parse_action("workspace_next") == SH_WORKSPACE_NEXT,
                 "control action names differ from Lua");
         rejects("return {bindings={{mods={'Alt'},key='1',action='workspace'}}}");

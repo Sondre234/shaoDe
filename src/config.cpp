@@ -213,8 +213,8 @@ Config read(lua_State *L) {
     Config config;
     table(L, -1, "configuration result");
     keys(L, -1,
-         {"version", "appearance", "keyboard", "mouse", "layout", "bindings", "startup", "shell",
-          "xwayland"});
+         {"version", "appearance", "keyboard", "mouse", "layout", "outputs", "bindings", "startup",
+          "shell", "xwayland"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
@@ -261,6 +261,38 @@ Config read(lua_State *L) {
         keys(L, -1, {"gap", "workspaces"});
         config.settings.gap = integer(L, "gap", 8, 0, 100);
         config.settings.workspaces = integer(L, "workspaces", 4, 1, 10);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, -1, "outputs");
+    if (!lua_isnil(L, -1)) {
+        table(L, -1, "outputs");
+        keys(L, -1, {"order", "primary"});
+        lua_getfield(L, -1, "order");
+        if (!lua_isnil(L, -1)) {
+            auto size = array_size(L, -1, std::size(config.settings.output_order));
+            for (size_t i = 1; i <= size; ++i) {
+                lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
+                auto name = string(L, -1, "output name");
+                auto &slot = config.settings.output_order[i - 1];
+                if (name.empty() || name.size() >= sizeof(slot))
+                    fail("output name is empty or too long");
+                for (size_t j = 0; j + 1 < i; ++j)
+                    if (name == config.settings.output_order[j])
+                        fail("duplicate output '" + name + "'");
+                std::memcpy(slot, name.c_str(), name.size() + 1);
+                lua_pop(L, 1);
+            }
+            config.settings.output_count = static_cast<int>(size);
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "primary");
+        if (!lua_isnil(L, -1)) {
+            auto name = string(L, -1, "primary");
+            if (name.empty() || name.size() >= sizeof(config.settings.primary_output))
+                fail("primary output name is empty or too long");
+            std::memcpy(config.settings.primary_output, name.c_str(), name.size() + 1);
+        }
+        lua_pop(L, 1);
     }
     lua_pop(L, 1);
     lua_getfield(L, -1, "bindings");

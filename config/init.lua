@@ -9,6 +9,11 @@ return {
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
     layout = { gap = 8, workspaces = 4 },
+    outputs = {
+        -- Left to right by connector name; unlisted monitors follow on the right.
+        order = { "HDMI-A-1", "DP-3", "DP-1" },
+        primary = "DP-3", -- the cursor starts here; without it, the leftmost monitor
+    },
     xwayland = true, -- run X11 applications; Xwayland starts on first use (restart to change)
     shell = {
         enabled = true,

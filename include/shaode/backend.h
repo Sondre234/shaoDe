@@ -41,6 +41,11 @@ struct sh_settings {
     char keyboard_options[128];
     bool xwayland; /* read at startup; changing it needs a restart */
     int workspaces;
+    /* Outputs named here sit left to right in this order; others follow as they appear.
+     * The primary output (or the leftmost, if unnamed) sits at the layout origin. */
+    char output_order[8][32];
+    int output_count;
+    char primary_output[32];
 };
 
 struct sh_callbacks {
