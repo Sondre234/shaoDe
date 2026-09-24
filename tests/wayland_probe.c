@@ -27,7 +27,7 @@ struct probe {
     struct zwlr_foreign_toplevel_handle_v1 *handle;
     struct wl_seat *seat;
     struct wl_output *output;
-    int output_height, panel_height;
+    int output_width, output_height, panel_height;
     bool panel_ready, handle_minimized, handle_active, handle_closed, title_seen;
     struct wl_shm *shm;
     struct xdg_wm_base *shell;
@@ -37,7 +37,7 @@ struct probe {
     struct wl_callback *frame;
     struct buffer *buffers;
     int width, height, stage;
-    bool maximized, done, external_control, external_panel;
+    bool maximized, fullscreen, handle_fullscreen, done, external_control, external_panel;
 };
 static void die(const char *message) {
     fprintf(stderr, "wayland probe: %s\n", message);
@@ -59,13 +59,15 @@ static void handle_output(void *data, struct zwlr_foreign_toplevel_handle_v1 *ha
 static void handle_state(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle,
                          struct wl_array *states) {
     struct probe *probe = data;
-    probe->handle_minimized = probe->handle_active = false;
+    probe->handle_minimized = probe->handle_active = probe->handle_fullscreen = false;
     uint32_t *state;
     wl_array_for_each(state, states) {
         if (*state == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED)
             probe->handle_minimized = true;
         if (*state == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED)
             probe->handle_active = true;
+        if (*state == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN)
+            probe->handle_fullscreen = true;
     }
 }
 static void handle_done(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle) {
@@ -107,8 +109,10 @@ static void output_geometry(void *data, struct wl_output *output, int32_t x, int
                             int32_t transform) {}
 static void output_mode(void *data, struct wl_output *output, uint32_t flags, int32_t w, int32_t h,
                         int32_t refresh) {
-    if (flags & WL_OUTPUT_MODE_CURRENT)
+    if (flags & WL_OUTPUT_MODE_CURRENT) {
+        ((struct probe *)data)->output_width = w;
         ((struct probe *)data)->output_height = h;
+    }
 }
 static void output_done(void *data, struct wl_output *output) {}
 static void output_scale(void *data, struct wl_output *output, int32_t scale) {}
@@ -165,6 +169,22 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time) 
         puts("floating size restored and rendered");
         if (!probe->handle || !probe->title_seen)
             die("window was not published to taskbar clients");
+        probe->stage = 6;
+        xdg_toplevel_set_fullscreen(probe->toplevel, NULL);
+        wl_surface_commit(probe->surface);
+    } else if (probe->stage == 6 && probe->fullscreen) {
+        if (probe->width != probe->output_width || probe->height != probe->output_height)
+            die("fullscreen did not cover the whole output");
+        if (!probe->handle_fullscreen)
+            die("taskbar handle did not report fullscreen");
+        puts("fullscreen covered the output, including the panel, and rendered");
+        probe->stage = 7;
+        xdg_toplevel_unset_fullscreen(probe->toplevel);
+        wl_surface_commit(probe->surface);
+    } else if (probe->stage == 7 && !probe->fullscreen) {
+        if (probe->width != 320 || probe->height != 240)
+            die("floating size was not restored after fullscreen");
+        puts("fullscreen exit restored floating size");
         probe->stage = 3;
         zwlr_foreign_toplevel_handle_v1_set_minimized(probe->handle);
     }
@@ -231,10 +251,14 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel, int32_
     struct probe *probe = data;
     probe->width = width > 0 ? width : 320;
     probe->height = height > 0 ? height : 240;
-    probe->maximized = false;
+    probe->maximized = probe->fullscreen = false;
     uint32_t *state;
-    wl_array_for_each(state, states) if (*state == XDG_TOPLEVEL_STATE_MAXIMIZED) probe->maximized =
-        true;
+    wl_array_for_each(state, states) {
+        if (*state == XDG_TOPLEVEL_STATE_MAXIMIZED)
+            probe->maximized = true;
+        if (*state == XDG_TOPLEVEL_STATE_FULLSCREEN)
+            probe->fullscreen = true;
+    }
 }
 static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
     struct probe *probe = data;

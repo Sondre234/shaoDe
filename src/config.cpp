@@ -136,6 +136,8 @@ sh_action action(const std::string &name) {
         return SH_TILE;
     if (name == "reload")
         return SH_RELOAD;
+    if (name == "fullscreen")
+        return SH_FULLSCREEN;
     fail("unknown action '" + name + "'");
 }
 

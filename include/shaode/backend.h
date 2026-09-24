@@ -19,7 +19,8 @@ enum sh_action {
     SH_MAXIMIZE,
     SH_RESTORE,
     SH_TILE,
-    SH_RELOAD
+    SH_RELOAD,
+    SH_FULLSCREEN
 };
 
 /* Modifier bits intentionally match wlroots, without importing its headers. */

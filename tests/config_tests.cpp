@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     try {
         require(argc == 2, "example config path required");
         auto config = shaode::load_config(argv[1]);
-        require(config.bindings.size() == 10, "example shortcuts missing");
+        require(config.bindings.size() == 11, "example shortcuts missing");
         require(config.shell.enabled && config.shell.panel_height == 52 &&
                     config.shell.launchers.size() == 2,
                 "example shell settings missing");
@@ -30,6 +30,8 @@ int main(int argc, char **argv) {
         require(config.binding(SH_ALT | SH_SHIFT | 2, XKB_KEY_R)->action == SH_RELOAD,
                 "shifted shortcut or CapsLock normalization failed");
         require(!config.binding(SH_ALT | SH_CTRL, XKB_KEY_Return), "extra modifiers matched");
+        auto *fullscreen = config.binding(SH_ALT, XKB_KEY_F11);
+        require(fullscreen && fullscreen->action == SH_FULLSCREEN, "fullscreen binding missing");
         auto computed = shaode::parse_config("local gap = 3; return {layout={gap=gap*2}}");
         require(computed.settings.gap == 6, "Lua evaluation failed");
         rejects("return {layout={gap=-1}}");
@@ -57,7 +59,7 @@ int main(int argc, char **argv) {
             config = shaode::parse_config("return {layout={gap=999}}");
         } catch (const std::exception &) {
         }
-        require(config.settings.gap == 8 && config.bindings.size() == 10,
+        require(config.settings.gap == 8 && config.bindings.size() == 11,
                 "failed reload changed active configuration");
         std::cout << "Configuration validation, bindings, and transactional loading passed\n";
     } catch (const std::exception &error) {

@@ -62,6 +62,7 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Alt + Left/Right | Snap to half the output |
 | Alt + Up/Down | Maximize / restore saved floating geometry |
 | Alt + T | Arrange the current output's windows in a grid |
+| Alt + F11 | Toggle fullscreen |
 | Alt + Shift + R | Reload Lua configuration |
 | Alt + Shift + Escape | Exit the nested compositor |
 
@@ -71,7 +72,8 @@ SIGINT/SIGTERM requests shutdown. A reload does not rerun startup commands.
 
 Initial limitations: tiling is a one-shot arrangement, not persistent automatic
 tiling; snapping is keyboard-driven, without edge-drag previews. Decorations
-come from clients, and fullscreen requests are not yet implemented. Window
+come from clients. Fullscreen covers the panel while the window is focused;
+focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
 client's next buffer. There are no workspaces, XWayland,
 lock screen, portal integration, or support for using this as a daily desktop.

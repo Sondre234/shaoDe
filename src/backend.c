@@ -60,6 +60,7 @@ struct sh_server {
     uint32_t grab_button;
     struct wlr_scene_tree *backgrounds;
     struct wlr_scene_tree *windows;
+    struct wlr_scene_tree *fullscreen;
     struct wlr_scene_tree *layer_trees[4];
     struct wl_list layers;
     struct wlr_layer_shell_v1 *layer_shell;
@@ -125,6 +126,9 @@ struct sh_toplevel {
     struct wlr_foreign_toplevel_handle_v1 *foreign;
     struct wl_listener title_changed, app_id_changed;
     struct wl_listener foreign_activate, foreign_close, foreign_maximize, foreign_minimize;
+    struct wl_listener foreign_fullscreen;
+    bool fullscreen;
+    struct wlr_box fullscreen_restore;
     struct wl_listener request_minimize;
     struct wlr_box restore_box;
     bool arranged;
@@ -176,6 +180,8 @@ static void deactivate_toplevel(struct sh_server *server) {
     if (!server->focused_toplevel)
         return;
     struct sh_toplevel *old = server->focused_toplevel;
+    if (old->fullscreen)
+        wlr_scene_node_reparent(&old->scene_tree->node, server->windows);
     wlr_xdg_toplevel_set_activated(old->xdg_toplevel, false);
     if (old->foreign)
         wlr_foreign_toplevel_handle_v1_set_activated(old->foreign, false);
@@ -192,6 +198,9 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
     server->focused_toplevel = toplevel;
     toplevel->minimized = false;
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
+    // Panels stay reachable once a fullscreen window loses focus.
+    wlr_scene_node_reparent(&toplevel->scene_tree->node,
+                            toplevel->fullscreen ? server->fullscreen : server->windows);
     wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
     wl_list_remove(&toplevel->link);
     wl_list_insert(&server->toplevels, &toplevel->link);
@@ -262,6 +271,7 @@ static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) 
 }
 
 static void reload_config(struct sh_server *server);
+static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen);
 static void arrange_windows(struct sh_server *server, enum sh_action action);
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges);
@@ -289,6 +299,12 @@ static bool handle_keybinding(struct sh_server *server, uint32_t modifiers, xkb_
         if (wl_list_length(&server->toplevels) > 1) {
             struct sh_toplevel *next = wl_container_of(server->toplevels.prev, next, link);
             focus_toplevel(next);
+        }
+        break;
+    case SH_FULLSCREEN:
+        if (!wl_list_empty(&server->toplevels)) {
+            struct sh_toplevel *focused = wl_container_of(server->toplevels.next, focused, link);
+            set_fullscreen(focused, !focused->fullscreen);
         }
         break;
     case SH_CLOSE:
@@ -642,12 +658,15 @@ static void reload_config(struct sh_server *server) {
     update_backgrounds(server);
 }
 
+static void refit_fullscreen(struct sh_server *server);
+
 static void output_request_state(struct wl_listener *listener, void *data) {
     struct sh_output *output = wl_container_of(listener, output, request_state);
     const struct wlr_output_event_request_state *event = data;
     if (wlr_output_commit_state(output->wlr_output, event->state)) {
         update_backgrounds(output->server);
         arrange_layers(output->server);
+        refit_fullscreen(output->server);
     }
 }
 
@@ -766,6 +785,8 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     if (wl_list_empty(&server->toplevels))
         return;
     struct sh_toplevel *focused = wl_container_of(server->toplevels.next, focused, link);
+    if (focused->fullscreen)
+        set_fullscreen(focused, false);
     if (action == SH_RESTORE) {
         restore_toplevel(focused);
         return;
@@ -785,11 +806,11 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     int count = 0, index = 0;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel_output(toplevel) == output && !toplevel->minimized)
+        if (toplevel_output(toplevel) == output && !toplevel->minimized && !toplevel->fullscreen)
             ++count;
     }
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel_output(toplevel) != output || toplevel->minimized)
+        if (toplevel_output(toplevel) != output || toplevel->minimized || toplevel->fullscreen)
             continue;
         if (sh_placement(action, area, gap, index++, count, &target))
             place_toplevel(toplevel, action, target);
@@ -804,12 +825,13 @@ static void reflow_output(struct sh_server *server, struct wlr_output *output) {
     int gap = server->callbacks->settings(server->callbacks->userdata)->gap;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel->arranged && !toplevel->minimized && toplevel_output(toplevel) == output &&
-            toplevel->arrangement == SH_TILE)
+        if (toplevel->arranged && !toplevel->minimized && !toplevel->fullscreen &&
+            toplevel_output(toplevel) == output && toplevel->arrangement == SH_TILE)
             ++count;
     }
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (!toplevel->arranged || toplevel->minimized || toplevel_output(toplevel) != output)
+        if (!toplevel->arranged || toplevel->minimized || toplevel->fullscreen ||
+            toplevel_output(toplevel) != output)
             continue;
         enum sh_action action = toplevel->arrangement;
         if (sh_placement(action, area, gap, action == SH_TILE ? index++ : 0,
@@ -841,6 +863,11 @@ static void foreign_maximize(struct wl_listener *listener, void *data) {
     struct wlr_box box;
     usable_area(toplevel->server, output, &box);
     place_toplevel(toplevel, SH_MAXIMIZE, (struct sh_rect){box.x, box.y, box.width, box.height});
+}
+static void foreign_fullscreen(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_fullscreen);
+    struct wlr_foreign_toplevel_handle_v1_fullscreen_event *event = data;
+    set_fullscreen(toplevel, event->fullscreen);
 }
 static void foreign_minimize(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_minimize);
@@ -883,6 +910,9 @@ static void publish_toplevel(struct sh_toplevel *toplevel) {
     wl_signal_add(&toplevel->foreign->events.request_maximize, &toplevel->foreign_maximize);
     toplevel->foreign_minimize.notify = foreign_minimize;
     wl_signal_add(&toplevel->foreign->events.request_minimize, &toplevel->foreign_minimize);
+    toplevel->foreign_fullscreen.notify = foreign_fullscreen;
+    wl_signal_add(&toplevel->foreign->events.request_fullscreen, &toplevel->foreign_fullscreen);
+    wlr_foreign_toplevel_handle_v1_set_fullscreen(toplevel->foreign, toplevel->fullscreen);
     struct wlr_output *output = toplevel_output(toplevel);
     if (output)
         wlr_foreign_toplevel_handle_v1_output_enter(toplevel->foreign, output);
@@ -894,6 +924,7 @@ static void unpublish_toplevel(struct sh_toplevel *toplevel) {
     wl_list_remove(&toplevel->foreign_close.link);
     wl_list_remove(&toplevel->foreign_maximize.link);
     wl_list_remove(&toplevel->foreign_minimize.link);
+    wl_list_remove(&toplevel->foreign_fullscreen.link);
     wlr_foreign_toplevel_handle_v1_destroy(toplevel->foreign);
     toplevel->foreign = NULL;
 }
@@ -1046,7 +1077,9 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 
     publish_toplevel(toplevel);
     focus_toplevel(toplevel);
-    if (toplevel->xdg_toplevel->requested.maximized)
+    if (toplevel->xdg_toplevel->requested.fullscreen)
+        set_fullscreen(toplevel, true);
+    else if (toplevel->xdg_toplevel->requested.maximized)
         xdg_toplevel_request_maximize(&toplevel->request_maximize, NULL);
 }
 
@@ -1057,6 +1090,7 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
         reset_cursor_mode(toplevel->server);
     }
 
+    toplevel->fullscreen = false;
     bool was_focused = toplevel->server->focused_toplevel == toplevel;
     if (was_focused)
         deactivate_toplevel(toplevel->server);
@@ -1095,6 +1129,8 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges) {
     struct sh_server *server = toplevel->server;
+    if (toplevel->fullscreen)
+        return;
 
     toplevel->arranged = false;
     if (toplevel->foreign)
@@ -1145,6 +1181,10 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_maximize);
     if (!toplevel->xdg_toplevel->base->initialized)
         return;
+    if (toplevel->fullscreen) {
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+        return;
+    }
     if (toplevel->xdg_toplevel->requested.maximized) {
         struct wlr_output *output = toplevel_output(toplevel);
         if (output) {
@@ -1158,11 +1198,63 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
     wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 }
 
+/* Fullscreen covers the whole output, including exclusive panel zones. */
+static void fit_fullscreen(struct sh_toplevel *toplevel) {
+    struct wlr_output *output = toplevel_output(toplevel);
+    if (!output)
+        return;
+    struct wlr_box box;
+    wlr_output_layout_get_box(toplevel->server->output_layout, output, &box);
+    wlr_scene_node_set_position(&toplevel->scene_tree->node, box.x, box.y);
+    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, box.width, box.height);
+}
+
+static void refit_fullscreen(struct sh_server *server) {
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel->fullscreen)
+            fit_fullscreen(toplevel);
+    }
+}
+
+static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen) {
+    struct sh_server *server = toplevel->server;
+    if (!toplevel->xdg_toplevel->base->surface->mapped || toplevel->fullscreen == fullscreen) {
+        if (toplevel->xdg_toplevel->base->initialized)
+            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+        return;
+    }
+    if (server->grabbed_toplevel == toplevel)
+        reset_cursor_mode(server);
+    struct wlr_box *geometry = &toplevel->xdg_toplevel->base->geometry;
+    if (fullscreen)
+        toplevel->fullscreen_restore =
+            (struct wlr_box){toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
+                             geometry->width, geometry->height};
+    toplevel->fullscreen = fullscreen;
+    wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, fullscreen);
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_fullscreen(toplevel->foreign, fullscreen);
+    if (fullscreen) {
+        fit_fullscreen(toplevel);
+    } else {
+        wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->fullscreen_restore.x,
+                                    toplevel->fullscreen_restore.y);
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->fullscreen_restore.width,
+                                  toplevel->fullscreen_restore.height);
+        wlr_scene_node_reparent(&toplevel->scene_tree->node, server->windows);
+        // The usable area may have changed while this window covered the output.
+        struct wlr_output *output = toplevel_output(toplevel);
+        if (toplevel->arranged && output)
+            reflow_output(server, output);
+    }
+    if (server->focused_toplevel == toplevel || fullscreen)
+        focus_toplevel(toplevel);
+}
+
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_fullscreen);
-    if (toplevel->xdg_toplevel->base->initialized) {
-        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-    }
+    set_fullscreen(toplevel, toplevel->xdg_toplevel->requested.fullscreen);
 }
 
 static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
@@ -1332,6 +1424,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     server.layer_trees[1] = wlr_scene_tree_create(&server.scene->tree);
     server.windows = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[2] = wlr_scene_tree_create(&server.scene->tree);
+    server.fullscreen = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[3] = wlr_scene_tree_create(&server.scene->tree);
     wl_list_init(&server.layers);
     server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
