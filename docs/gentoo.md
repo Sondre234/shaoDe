@@ -16,7 +16,8 @@ between release series. Relevant Gentoo packages are:
 - `dev-lang/lua:5.4`
 - `dev-libs/wayland` and `dev-libs/wayland-protocols`
 - `dev-util/wayland-scanner` and `x11-libs/libxkbcommon`
-- `dev-qt/qtbase:6`, `dev-qt/qtdeclarative:6`, and `dev-qt/qtwayland:6`
+- `dev-qt/qtbase:6` (with its default `network` USE flag), `dev-qt/qtdeclarative:6`,
+  and `dev-qt/qtwayland:6`
 - `kde-plasma/layer-shell-qt:6` (6.6+) and `dev-libs/glib:2` for the desktop shell
 - `dev-build/cmake`, `dev-build/ninja`, and `virtual/pkgconfig`
 - A compiler supporting C11 and C++20
@@ -77,8 +78,9 @@ personal file. For a custom location use `--config /path/to/init.lua`.
 The normal build includes `shaode-shell` alongside `shaode`. For compositor-only
 development add `-DSHAODE_BUILD_SHELL=OFF`; Qt, GIO, and LayerShellQt are then
 unnecessary. `--no-shell` skips shell startup at runtime. Lua's `shell` table
-controls its colors, panel height, wallpaper path, and pinned launchers. Reload
-with Alt+Shift+R after editing the file. Invalid configuration retains the last
+controls its colors, panel height, wallpaper path, and pinned launchers;
+`layout.tiling = true` starts with automatic tiling, which the panel button and
+Alt+Shift+T toggle at runtime. Reload with Alt+Shift+R after editing the file. Invalid configuration retains the last
 working settings.
 
 `BUILD_TESTING=OFF` omits the test tools/Python requirement. `DESTDIR` staging and

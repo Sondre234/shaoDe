@@ -1,7 +1,7 @@
 # shaoDe
 
 A mouse-first Wayland desktop with Lua configuration, floating windows,
-edge snapping, and optional tiling. C++ owns configuration and desktop policy;
+edge snapping, and optional Hyprland-style automatic tiling. C++ owns configuration and desktop policy;
 a C adapter integrates wlroots. A Qt Quick shell adds a desktop, taskbar, and
 searchable application launcher.
 
@@ -11,13 +11,14 @@ This is an early development project, not a replacement desktop session yet.
 
 The first working compositor supports real Wayland applications, click-to-focus,
 mouse move/resize, configurable shortcuts, half-screen snapping, maximize/restore,
-a one-shot grid arrangement, and Lua reload. It uses a TinyWL-derived C adapter
+a one-shot grid arrangement, automatic dwindle tiling that can be switched on and
+off, workspaces, and Lua reload. It uses a TinyWL-derived C adapter
 with C++ configuration and placement policy. The Qt shell runs live
 through LayerShellQt, with a panel and desktop on every monitor.
 
 Requirements: CMake 3.25+, C11 and C++20 compilers, pkg-config, Lua 5.4,
 xkbcommon, wlroots **0.20.x**, wayland-server, wayland-protocols, and
-wayland-scanner. The shell also needs Qt 6.5+ (Core, Gui, Qml, Quick, Quick Controls
+wayland-scanner. The shell also needs Qt 6.5+ (Core, Gui, Network, Qml, Quick, Quick Controls
 Basic, Quick Layouts, and the Wayland platform plugin), LayerShellQt 6.6+, GLib/GIO,
 and wayland-client. Tests use Python 3. Ninja is used below.
 Gentoo setup and standalone-session instructions are in [docs/gentoo.md](docs/gentoo.md).
@@ -46,7 +47,7 @@ automatically with the example configuration.
 
 The shell has pinned desktop shortcuts (double-click to launch), a taskbar with
 window activation/minimization and a right-click window menu, an application
-search menu, a clock, and a show-desktop button. Installed applications are read
+search menu, a tiling on/off button, a clock, and a show-desktop button. Installed applications are read
 from desktop entries through GIO. Lua configures panel height, colors, wallpaper,
 and pinned commands. Pinned commands run from your home directory. In a nested
 session, applications that reuse an existing process or D-Bus service can open
@@ -56,7 +57,7 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 
 | Input | Action |
 | --- | --- |
-| Alt + left/right drag | Move / resize a window |
+| Alt + left/right drag | Move / resize a window (on a tile: move it, or move its splits) |
 | Alt + Enter | Launch Kitty |
 | Alt + Tab | Cycle windows |
 | Alt + F4 | Close focused window |
@@ -158,10 +159,11 @@ or `~/.config/shaode/init.lua` when `XDG_CONFIG_HOME` is unset, then falls back
 to the installed example under the configured data directory. It never creates
 or overwrites a personal configuration automatically.
 
-CTest covers configuration validation, layout bounds/non-overlap, and a headless
-compositor with real xdg-shell clients. The integration test verifies mapping,
-frame callbacks, maximize/restore, unmapping, accepted/rejected reloads, and clean
-shutdown in an isolated temporary runtime directory. Shell builds also render
+CTest covers configuration validation, grid and dwindle layout bounds/non-overlap,
+and a headless compositor with real xdg-shell clients. The integration tests verify
+mapping, frame callbacks, maximize/restore, unmapping, accepted/rejected reloads,
+workspaces, tiling on/off with splitting and floating, session locking, XWayland
+(when available), and clean shutdown in an isolated temporary runtime directory. Shell builds also render
 both QML surfaces using Qt's offscreen software backend. No display session is needed.
 
 To build the compositor without Qt, add `-DSHAODE_BUILD_SHELL=OFF`. To work on
@@ -179,7 +181,7 @@ Preview builds do not install or automatically launch the shell. Preview windows
 show the UI and can launch applications, but do not manage windows or reserve
 space on the host desktop.
 
-To build only the configuration and placement tests without wlroots:
+To build only the configuration, placement, and tiling tests without wlroots:
 
 ```sh
 cmake -S . -B build-config -G Ninja -DSHAODE_BUILD_COMPOSITOR=OFF
@@ -210,6 +212,8 @@ between release series. Develop nested inside the existing Wayland session first
 - [wlroots API](https://wlroots.pages.freedesktop.org/wlroots/)
 - [TinyWL 0.20.2](https://gitlab.freedesktop.org/wlroots/wlroots/-/tree/0.20.2/tinywl)
 - [Lua 5.4 API](https://www.lua.org/manual/5.4/manual.html)
+- [Hyprland dwindle layout](https://wiki.hypr.land/configuring/layouts/dwindle-layout/),
+  the model for shaoDe's tiling (reimplemented, no Hyprland code is included)
 
 The compositor adapter derives from TinyWL. Its upstream MIT license is
 preserved in [vendor/tinywl/LICENSE](vendor/tinywl/LICENSE). No project-wide
