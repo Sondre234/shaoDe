@@ -146,6 +146,10 @@ sh_action action(const std::string &name) {
         return SH_WORKSPACE_NEXT;
     if (name == "workspace_prev")
         return SH_WORKSPACE_PREV;
+    if (name == "toggle_tiling")
+        return SH_TOGGLE_TILING;
+    if (name == "toggle_floating")
+        return SH_TOGGLE_FLOATING;
     fail("unknown action '" + name + "'");
 }
 
@@ -258,8 +262,15 @@ Config read(lua_State *L) {
     lua_getfield(L, -1, "layout");
     if (!lua_isnil(L, -1)) {
         table(L, -1, "layout");
-        keys(L, -1, {"gap", "workspaces"});
+        keys(L, -1, {"gap", "workspaces", "tiling"});
         config.settings.gap = integer(L, "gap", 8, 0, 100);
+        lua_getfield(L, -1, "tiling");
+        if (!lua_isnil(L, -1)) {
+            if (!lua_isboolean(L, -1))
+                fail("layout.tiling must be a boolean");
+            config.settings.tiling = lua_toboolean(L, -1);
+        }
+        lua_pop(L, 1);
         config.settings.workspaces = integer(L, "workspaces", 4, 1, 10);
     }
     lua_pop(L, 1);

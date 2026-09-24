@@ -25,11 +25,14 @@ enum sh_action {
     SH_WORKSPACE,         /* argument: workspace number, from 1 */
     SH_MOVE_TO_WORKSPACE, /* argument: workspace number, from 1 */
     SH_WORKSPACE_NEXT,
-    SH_WORKSPACE_PREV
+    SH_WORKSPACE_PREV,
+    SH_TOGGLE_TILING,
+    SH_TOGGLE_FLOATING
 };
 
-/* Modifier bits intentionally match wlroots, without importing its headers. */
+/* Modifier and edge bits intentionally match wlroots, without importing its headers. */
 enum sh_modifier { SH_SHIFT = 1, SH_CTRL = 4, SH_ALT = 8, SH_LOGO = 64 };
+enum sh_edge { SH_EDGE_TOP = 1, SH_EDGE_BOTTOM = 2, SH_EDGE_LEFT = 4, SH_EDGE_RIGHT = 8 };
 
 struct sh_settings {
     float background[4];
@@ -40,6 +43,7 @@ struct sh_settings {
     char keyboard_layout[128];
     char keyboard_options[128];
     bool xwayland; /* read at startup; changing it needs a restart */
+    bool tiling;   /* automatic tiling at startup; toggled at runtime afterwards */
     int workspaces;
     /* Outputs named here sit left to right in this order; others follow as they appear.
      * The primary output (or the leftmost, if unnamed) sits at the layout origin. */
@@ -69,6 +73,28 @@ struct sh_rect {
 };
 bool sh_placement(enum sh_action action, struct sh_rect area, int gap, int index, int count,
                   struct sh_rect *result);
+
+/* Automatic tiling in the style of Hyprland's dwindle layout: one binary split tree per output
+ * name and workspace. Each split divides its box along the longer side; a new window splits an
+ * existing one. Windows are opaque pointers owned by the caller. */
+struct sh_tiling;
+struct sh_tiling *sh_tiling_create(void);
+void sh_tiling_destroy(struct sh_tiling *tiling);
+/* Splits `target` if it is tiled, else the window last arranged under the point (with
+ * has_point), else the newest window of that tree. With a point inside the split window, the new
+ * window takes the half nearer the point; otherwise the right or bottom half. */
+void sh_tiling_insert(struct sh_tiling *tiling, const char *output, int workspace, void *window,
+                      const void *target, bool has_point, double x, double y);
+void sh_tiling_remove(struct sh_tiling *tiling, const void *window);
+/* The output name of the window's tree, or NULL when it is not tiled. */
+const char *sh_tiling_output(const struct sh_tiling *tiling, const void *window);
+typedef void (*sh_tile_place)(void *userdata, void *window, struct sh_rect rect);
+void sh_tiling_arrange(struct sh_tiling *tiling, const char *output, int workspace,
+                       struct sh_rect area, int gap, sh_tile_place place, void *userdata);
+/* Moves the splits beside the window's given edges (enum sh_edge bits) to those edges of
+ * `rect`, in the coordinates of the last arrangement. Returns whether anything changed. */
+bool sh_tiling_resize(struct sh_tiling *tiling, const void *window, uint32_t edges,
+                      struct sh_rect rect);
 
 #ifdef __cplusplus
 }

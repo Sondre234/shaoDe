@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     try {
         require(argc == 2, "example config path required");
         auto config = shaode::load_config(argv[1]);
-        require(config.bindings.size() == 21, "example shortcuts missing");
+        require(config.bindings.size() == 23, "example shortcuts missing");
         require(config.shell.enabled && config.shell.panel_height == 52 &&
                     config.shell.launchers.size() == 2,
                 "example shell settings missing");
@@ -36,6 +36,14 @@ int main(int argc, char **argv) {
         require(move && move->action == SH_MOVE_TO_WORKSPACE && move->workspace == 3,
                 "move-to-workspace binding missing");
         require(config.settings.workspaces == 4, "example workspace count changed");
+        require(!config.settings.tiling, "example starts tiled");
+        auto *toggle = config.binding(SH_ALT | SH_SHIFT, XKB_KEY_T);
+        require(toggle && toggle->action == SH_TOGGLE_TILING, "tiling toggle binding missing");
+        require(shaode::parse_config("return {layout={tiling=true}}").settings.tiling,
+                "layout.tiling not parsed");
+        require(shaode::parse_action("toggle_floating") == SH_TOGGLE_FLOATING,
+                "toggle_floating action missing");
+        rejects("return {layout={tiling='yes'}}");
         auto outputs = shaode::parse_config(
             "return {outputs={order={'HDMI-A-1','DP-3'},primary='DP-3'}}");
         require(outputs.settings.output_count == 2 &&
@@ -83,7 +91,7 @@ int main(int argc, char **argv) {
             config = shaode::parse_config("return {layout={gap=999}}");
         } catch (const std::exception &) {
         }
-        require(config.settings.gap == 8 && config.bindings.size() == 21,
+        require(config.settings.gap == 8 && config.bindings.size() == 23,
                 "failed reload changed active configuration");
         std::cout << "Configuration validation, bindings, and transactional loading passed\n";
     } catch (const std::exception &error) {

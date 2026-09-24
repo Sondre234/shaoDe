@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-workspace-test-") as directory:
 
     def windows():
         rows = [line.split("\t") for line in msg("get", "windows").splitlines()]
-        return {row[3]: (int(row[0]), row[1] == "1") for row in rows}
+        return {row[8]: (int(row[0]), row[1] == "1") for row in rows}
 
     with log.open("w") as output:
         server = subprocess.Popen([compositor, "--headless", "--config", str(config)],

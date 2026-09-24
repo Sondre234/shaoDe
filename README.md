@@ -62,7 +62,9 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Alt + F4 | Close focused window |
 | Alt + Left/Right | Snap to half the output |
 | Alt + Up/Down | Maximize / restore saved floating geometry |
-| Alt + T | Arrange the current output's windows in a grid |
+| Alt + T | Arrange the current output's windows in a grid (floating mode) |
+| Alt + Shift + T | Turn automatic tiling on or off |
+| Alt + Shift + F | Float or tile the focused window |
 | Alt + F11 | Toggle fullscreen |
 | Ctrl + Alt + 1–4 | Switch to workspace 1–4 |
 | Ctrl + Alt + Shift + 1–4 | Move the focused window to workspace 1–4 |
@@ -74,12 +76,34 @@ The host compositor can consume shortcuts before the nested compositor receives
 them; edit the Lua bindings if necessary. SIGHUP also requests a reload, and
 SIGINT/SIGTERM requests shutdown. A reload does not rerun startup commands.
 
-Initial limitations: tiling is a one-shot arrangement, not persistent automatic
-tiling; snapping is keyboard-driven, without edge-drag previews. Decorations
+Initial limitations: snapping is keyboard-driven, without edge-drag previews. Decorations
 come from clients. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
 client's next buffer. There is no portal integration yet.
+
+## Tiling
+
+The tiling button on the panel (next to the clock), Alt + Shift + T, or
+`shaode msg toggle_tiling` switches between floating windows and automatic tiling;
+Lua `layout.tiling = true` starts tiled. Tiling follows Hyprland's default *dwindle*
+layout: every output and workspace has its own binary split tree, each split divides
+its space along the longer side, and a new window splits the focused window (or the
+one under the pointer) on the side nearer the pointer. Closing a window gives its
+space back to its neighbour.
+
+- Mod + right drag on a tile, or dragging its edge, moves the split lines around it.
+- Moving a tile (Mod + left drag or its title bar) lifts it out; dropping it splits
+  the tile under the pointer.
+- Dialogs and fixed-size windows float. Alt + Shift + F (`toggle_floating`) floats
+  or tiles the focused window; snapping or maximizing a tile also floats it.
+- Turning tiling off returns every window to its floating position and size.
+- Minimized windows leave the tiling and rejoin it when restored; windows moved to
+  another workspace join that workspace's tiling on the same output.
+
+Not yet: keyboard focus/swap between neighbouring tiles, per-workspace on/off, and
+keeping floating windows above tiles. Windows tiled on a monitor that is unplugged
+keep their place until it returns.
 
 Workspaces are shared across outputs; `layout.workspaces` sets how many (1–10).
 The taskbar lists windows from every workspace, and activating one switches to its
@@ -92,10 +116,12 @@ cursor starts. Each monitor runs its preferred resolution at the fastest refresh
 rate available for it.
 
 A control socket runs any Lua action from scripts or other tools:
-`shaode msg workspace 2`, `shaode msg tile`, `shaode msg spawn foot`. The query
-`shaode msg get workspace` prints the current workspace, and `shaode msg get windows`
-prints one tab-separated line per window: workspace, focused, minimized, app ID, and
-title. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
+`shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. The query
+`shaode msg get workspace` prints the current workspace, `shaode msg get tiling` prints
+`on` or `off`, and `shaode msg get windows` prints one tab-separated line per window:
+workspace, focused, minimized, tiled, x, y, width, height, app ID, and title. A client
+that sends `subscribe` keeps its connection and receives `tiling on|off` and
+`workspace N` lines after every change; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
 refused while the session is locked.
 
 Screen locking uses the standard `ext-session-lock-v1` protocol, so lockers such
@@ -171,8 +197,8 @@ remaining limitations.
    background, snapping, basic tiling, and reload.
 3. **Done:** Qt Quick shell: taskbar, launcher, desktop shortcuts, wallpaper and
    icons, verified live on physical hardware.
-4. Persistent per-workspace tiling, drag-to-edge previews, window rules, and Lua
-   extension APIs shared by mouse controls and shortcuts.
+4. **Done:** automatic dwindle tiling with a panel toggle. Next: drag-to-edge previews,
+   window rules, and Lua extension APIs shared by mouse controls and shortcuts.
 5. Session integration: multi-monitor policy, notifications, tray,
    portals/screen sharing, power and audio controls.
 

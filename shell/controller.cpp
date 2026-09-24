@@ -10,6 +10,7 @@
 ShellController::ShellController(std::filesystem::path path, QObject *parent)
     : QObject(parent), path_(std::move(path)), config_(shaode::load_config(path_)), tasks_(this) {
     refreshApps();
+    subscribe();
 }
 ShellController::~ShellController() { clearApps(); }
 QColor ShellController::accent() const {
@@ -167,4 +168,49 @@ void ShellController::reload() {
         std::cerr << "Shell reload rejected: " << error.what() << '\n';
         report("Configuration unchanged: " + QString::fromUtf8(error.what()));
     }
+}
+void ShellController::subscribe() {
+    const auto path = qEnvironmentVariable("SHAODE_SOCKET");
+    if (path.isEmpty())
+        return;
+    state_ = new QLocalSocket(this);
+    connect(state_, &QLocalSocket::connected, this, [this] { state_->write("subscribe\n"); });
+    connect(state_, &QLocalSocket::readyRead, this, [this] {
+        while (state_->canReadLine()) {
+            const auto line = QString::fromUtf8(state_->readLine()).trimmed();
+            bool tiling = tiling_;
+            if (line == "ok")
+                subscribed_ = true;
+            else if (line.startsWith("tiling "))
+                tiling = line == "tiling on";
+            else
+                continue;
+            tiling_ = tiling;
+            Q_EMIT tilingChanged();
+        }
+    });
+    connect(state_, &QLocalSocket::disconnected, this, [this] {
+        subscribed_ = false;
+        Q_EMIT tilingChanged();
+    });
+    state_->connectToServer(path);
+}
+void ShellController::toggleTiling() {
+    const auto path = qEnvironmentVariable("SHAODE_SOCKET");
+    if (path.isEmpty()) {
+        report("Tiling needs a running shaoDe session.");
+        return;
+    }
+    // One request per connection; the new state arrives through the subscription.
+    auto *request = new QLocalSocket(this);
+    connect(request, &QLocalSocket::connected, request,
+            [request] { request->write("toggle_tiling\n"); });
+    connect(request, &QLocalSocket::disconnected, request, &QObject::deleteLater);
+    connect(request, &QLocalSocket::errorOccurred, this,
+            [this, request](QLocalSocket::LocalSocketError error) {
+                if (error != QLocalSocket::PeerClosedError)
+                    report("Could not reach the compositor: " + request->errorString());
+                request->deleteLater();
+            });
+    request->connectToServer(path);
 }

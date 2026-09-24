@@ -58,6 +58,11 @@ _Static_assert((unsigned)SH_ALT == (unsigned)WLR_MODIFIER_ALT &&
                    (unsigned)SH_CTRL == (unsigned)WLR_MODIFIER_CTRL &&
                    (unsigned)SH_LOGO == (unsigned)WLR_MODIFIER_LOGO,
                "C++ configuration and wlroots modifier bits must agree");
+_Static_assert((unsigned)SH_EDGE_TOP == (unsigned)WLR_EDGE_TOP &&
+                   (unsigned)SH_EDGE_BOTTOM == (unsigned)WLR_EDGE_BOTTOM &&
+                   (unsigned)SH_EDGE_LEFT == (unsigned)WLR_EDGE_LEFT &&
+                   (unsigned)SH_EDGE_RIGHT == (unsigned)WLR_EDGE_RIGHT,
+               "tiling and wlroots edge bits must agree");
 
 enum sh_cursor_mode {
     SH_CURSOR_PASSTHROUGH,
@@ -90,8 +95,12 @@ struct sh_server {
 #endif
 #endif
     int workspace; // current workspace, from 0
+    struct sh_tiling *tiling;
+    bool tiling_enabled;
+    bool grab_retile; // the grabbed window left the tiling to be moved; retile it on drop
 
     int control_fd;
+    struct wl_list subscribers; // control clients receiving state changes
     char control_path[108];
     struct wl_event_source *control_source;
     struct wlr_scene_tree *layer_trees[4];
@@ -182,6 +191,8 @@ struct sh_toplevel {
     struct wl_listener request_minimize;
     struct wlr_box restore_box;
     bool arranged;
+    bool tiled;    // in the tiling tree; restore_box keeps its floating geometry
+    bool floating; // kept out of the tiling (dialogs, or toggled by the user)
     struct wl_list link;
     struct sh_server *server;
     struct wlr_xdg_toplevel *xdg_toplevel; // NULL for X11 windows
@@ -364,6 +375,12 @@ static bool toplevel_accepts_keyboard(struct sh_toplevel *toplevel) {
 }
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void create_popup(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent);
+static void notify_subscribers(struct sh_server *server);
+static bool wants_tiling(struct sh_toplevel *toplevel);
+static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
+                          struct sh_toplevel *target, bool at_cursor);
+static void untile_toplevel(struct sh_toplevel *toplevel, bool restore);
+static struct wlr_output *tiled_output(struct sh_toplevel *toplevel);
 
 static bool toplevel_visible(struct sh_toplevel *toplevel) {
     return !toplevel->minimized && toplevel->workspace == toplevel->server->workspace;
@@ -377,6 +394,7 @@ static void show_workspace(struct sh_server *server, int workspace) {
         wlr_scene_node_set_enabled(&toplevel->scene_tree->node, toplevel_visible(toplevel));
     }
     wlr_log(WLR_INFO, "Workspace %d", workspace + 1);
+    notify_subscribers(server);
 }
 
 static void deactivate_toplevel(struct sh_server *server) {
@@ -404,7 +422,10 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
     deactivate_toplevel(server);
     server->focused_layer = NULL;
     server->focused_toplevel = toplevel;
+    bool was_minimized = toplevel->minimized;
     toplevel->minimized = false;
+    if (was_minimized && wants_tiling(toplevel))
+        tile_toplevel(toplevel, NULL, NULL, false);
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
     // Panels stay reachable once a fullscreen window loses focus.
     wlr_scene_node_reparent(&toplevel->scene_tree->node,
@@ -453,6 +474,7 @@ static void focus_layer(struct sh_layer *layer) {
 
 static void minimize_toplevel(struct sh_toplevel *toplevel) {
     toplevel->minimized = true;
+    untile_toplevel(toplevel, false);
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_minimized(toplevel->foreign, true);
@@ -482,6 +504,7 @@ static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) 
 static void reload_config(struct sh_server *server);
 static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen);
 static void arrange_windows(struct sh_server *server, enum sh_action action);
+static void set_tiling(struct sh_server *server, bool enabled);
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges);
 
@@ -495,6 +518,16 @@ static struct sh_toplevel *current_toplevel(struct sh_server *server) {
             return toplevel;
     }
     return NULL;
+}
+
+/* A tiled window moves into the tiling of the same output on its new workspace. */
+static void set_toplevel_workspace(struct sh_toplevel *toplevel, int workspace) {
+    bool retile = toplevel->tiled;
+    struct wlr_output *output = tiled_output(toplevel);
+    untile_toplevel(toplevel, false);
+    toplevel->workspace = workspace;
+    if (retile)
+        tile_toplevel(toplevel, output, NULL, false);
 }
 
 static void switch_workspace(struct sh_server *server, int workspace) {
@@ -515,7 +548,7 @@ static void move_to_workspace(struct sh_server *server, int workspace) {
         return;
     if (server->grabbed_toplevel == toplevel)
         reset_cursor_mode(server);
-    toplevel->workspace = workspace;
+    set_toplevel_workspace(toplevel, workspace);
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
     if (server->focused_toplevel == toplevel) {
         deactivate_toplevel(server);
@@ -567,6 +600,19 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
         break;
     case SH_WORKSPACE_PREV:
         switch_workspace(server, (server->workspace + count - 1) % count);
+        break;
+    case SH_TOGGLE_TILING:
+        set_tiling(server, !server->tiling_enabled);
+        break;
+    case SH_TOGGLE_FLOATING:
+        if (current && current->tiled) {
+            current->floating = true;
+            untile_toplevel(current, true);
+        } else if (current) {
+            current->floating = false;
+            if (wants_tiling(current))
+                tile_toplevel(current, NULL, NULL, true);
+        }
         break;
     default:
         arrange_windows(server, action);
@@ -849,6 +895,18 @@ static void cursor_request_set_shape(struct wl_listener *listener, void *data) {
 static void reset_cursor_mode(struct sh_server *server) {
     server->cursor_mode = SH_CURSOR_PASSTHROUGH;
     server->grabbed_toplevel = NULL;
+    server->grab_retile = false;
+}
+
+/* Dropping a window dragged out of the tiling splits the tile under the pointer. */
+static void finish_grab(struct sh_server *server) {
+    struct sh_toplevel *toplevel = server->grabbed_toplevel;
+    if (server->grab_retile && toplevel && wants_tiling(toplevel))
+        tile_toplevel(toplevel,
+                      wlr_output_layout_output_at(server->output_layout, server->cursor->x,
+                                                  server->cursor->y),
+                      NULL, true);
+    server->grab_retile = false;
 }
 
 static void process_cursor_move(struct sh_server *server) {
@@ -889,6 +947,14 @@ static void process_cursor_resize(struct sh_server *server) {
         }
     }
 
+    if (toplevel->tiled) {
+        // Resizing a tile moves the splits beside the dragged edges instead.
+        struct sh_rect rect = {new_left, new_top, new_right - new_left, new_bottom - new_top};
+        struct wlr_output *output = tiled_output(toplevel);
+        if (sh_tiling_resize(server->tiling, toplevel, server->resize_edges, rect) && output)
+            reflow_output(server, output);
+        return;
+    }
     struct wlr_box geo_box = toplevel_geometry(toplevel);
     toplevel_configure(toplevel, new_left - geo_box.x, new_top - geo_box.y, new_right - new_left,
                        new_bottom - new_top);
@@ -943,6 +1009,7 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
     wlr_idle_notifier_v1_notify_activity(server->idle_notifier, server->seat);
     if (server->grab_button == event->button && event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
         server->grab_button = 0;
+        finish_grab(server);
         reset_cursor_mode(server);
         process_cursor_motion(server, event->time_msec);
         return;
@@ -968,15 +1035,25 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         if (toplevel && (mods & settings->mouse_modifier) &&
             (event->button == BTN_LEFT || event->button == BTN_RIGHT)) {
             server->grab_button = event->button;
+            uint32_t edges = WLR_EDGE_BOTTOM | WLR_EDGE_RIGHT;
+            if (toplevel->tiled) {
+                // A tile's outer edges cannot move, so resize from the corner nearest the pointer.
+                struct wlr_box geometry = toplevel_geometry(toplevel);
+                double center_x = toplevel->scene_tree->node.x + geometry.x + geometry.width / 2.0;
+                double center_y = toplevel->scene_tree->node.y + geometry.y + geometry.height / 2.0;
+                edges = (server->cursor->x < center_x ? WLR_EDGE_LEFT : WLR_EDGE_RIGHT) |
+                        (server->cursor->y < center_y ? WLR_EDGE_TOP : WLR_EDGE_BOTTOM);
+            }
             begin_interactive(toplevel,
-                              event->button == BTN_LEFT ? SH_CURSOR_MOVE : SH_CURSOR_RESIZE,
-                              WLR_EDGE_BOTTOM | WLR_EDGE_RIGHT);
+                              event->button == BTN_LEFT ? SH_CURSOR_MOVE : SH_CURSOR_RESIZE, edges);
             return;
         }
     }
     wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button, event->state);
-    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED)
+    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        finish_grab(server);
         reset_cursor_mode(server);
+    }
 }
 
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
@@ -1241,13 +1318,16 @@ static void reload_config(struct sh_server *server) {
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
         if (toplevel->workspace >= count)
-            toplevel->workspace = count - 1;
+            set_toplevel_workspace(toplevel, count - 1);
     }
     if (server->workspace >= count) {
         deactivate_toplevel(server);
         show_workspace(server, count - 1);
         focus_previous(server);
     }
+    // The gap may have changed.
+    struct sh_output *output;
+    wl_list_for_each(output, &server->outputs, link) reflow_output(server, output->wlr_output);
 }
 
 static void output_request_state(struct wl_listener *listener, void *data) {
@@ -1390,11 +1470,20 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     struct sh_toplevel *focused = current_toplevel(server);
     if (!focused)
         return;
+    if (action == SH_TILE && server->tiling_enabled)
+        return; // Already tiled automatically.
+    if (focused->tiled && action == SH_RESTORE)
+        return;
     if (focused->fullscreen)
         set_fullscreen(focused, false);
     if (action == SH_RESTORE) {
         restore_toplevel(focused);
         return;
+    }
+    // A tiled window placed by hand floats from then on.
+    if (focused->tiled) {
+        focused->floating = true;
+        untile_toplevel(focused, false);
     }
     struct wlr_output *output = toplevel_output(focused);
     if (!output)
@@ -1424,6 +1513,15 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     }
 }
 
+static void place_tiled(void *data, void *window, struct sh_rect rect) {
+    struct sh_toplevel *toplevel = window;
+    if (toplevel->fullscreen)
+        return; // It returns to its tile when it leaves fullscreen.
+    toplevel_set_states(toplevel, false,
+                        WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
+    toplevel_configure(toplevel, rect.x, rect.y, rect.width, rect.height);
+}
+
 static void reflow_output(struct sh_server *server, struct wlr_output *output) {
     struct wlr_box box;
     usable_area(server, output, &box);
@@ -1447,7 +1545,106 @@ static void reflow_output(struct sh_server *server, struct wlr_output *output) {
                              action == SH_TILE ? count : 1, &target))
                 place_toplevel(toplevel, action, target);
         }
+        sh_tiling_arrange(server->tiling, output->name, workspace, area, settings->gap, place_tiled,
+                          NULL);
     }
+}
+
+static struct wlr_output *find_output(struct sh_server *server, const char *name) {
+    struct sh_output *output;
+    wl_list_for_each(output, &server->outputs, link) {
+        if (output_named(output, name))
+            return output->wlr_output;
+    }
+    return NULL;
+}
+
+static struct wlr_output *tiled_output(struct sh_toplevel *toplevel) {
+    const char *name = sh_tiling_output(toplevel->server->tiling, toplevel);
+    return name ? find_output(toplevel->server, name) : NULL;
+}
+
+static bool wants_tiling(struct sh_toplevel *toplevel) {
+    return toplevel->server->tiling_enabled && !toplevel->tiled && !toplevel->floating &&
+           !toplevel->minimized;
+}
+
+/* Dialogs and fixed-size windows float, as in Hyprland. */
+static bool toplevel_is_dialog(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        return toplevel->xsurface->parent || toplevel->xsurface->modal;
+#endif
+    const struct wlr_xdg_toplevel_state *state = &toplevel->xdg_toplevel->current;
+    return toplevel->xdg_toplevel->parent ||
+           (state->min_width > 0 && state->min_width == state->max_width && state->min_height > 0 &&
+            state->min_height == state->max_height);
+}
+
+/* Adds a window to the tiling of `output` (by default the one it is on), splitting `target`
+ * when that is tiled there, else the tile under the pointer with `at_cursor`. */
+static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
+                          struct sh_toplevel *target, bool at_cursor) {
+    struct sh_server *server = toplevel->server;
+    if (!output)
+        output = toplevel_output(toplevel);
+    if (!output || toplevel->tiled)
+        return;
+    if (!toplevel->arranged) {
+        struct wlr_box geometry = toplevel_geometry(toplevel);
+        toplevel->restore_box =
+            toplevel->fullscreen
+                ? toplevel->fullscreen_restore
+                : (struct wlr_box){toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
+                                   geometry.width, geometry.height};
+    }
+    toplevel->arranged = false;
+    toplevel->tiled = true;
+    if (toplevel->foreign)
+        wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
+    sh_tiling_insert(server->tiling, output->name, toplevel->workspace, toplevel, target, at_cursor,
+                     server->cursor->x, server->cursor->y);
+    reflow_output(server, output);
+}
+
+/* Takes a window out of the tiling. `restore` returns it to its floating geometry; otherwise
+ * it stays where it is, arranged without a rule, until something else places it. */
+static void untile_toplevel(struct sh_toplevel *toplevel, bool restore) {
+    struct sh_server *server = toplevel->server;
+    if (!toplevel->tiled)
+        return;
+    struct wlr_output *output = tiled_output(toplevel);
+    sh_tiling_remove(server->tiling, toplevel);
+    toplevel->tiled = false;
+    toplevel->arranged = !restore;
+    toplevel->arrangement = SH_NONE;
+    if (restore && toplevel->fullscreen) {
+        toplevel->fullscreen_restore = toplevel->restore_box;
+    } else if (restore) {
+        toplevel_set_states(toplevel, false, 0);
+        toplevel_configure(toplevel, toplevel->restore_box.x, toplevel->restore_box.y,
+                           toplevel->restore_box.width, toplevel->restore_box.height);
+    }
+    if (output && server->tiling_enabled)
+        reflow_output(server, output);
+}
+
+static void set_tiling(struct sh_server *server, bool enabled) {
+    if (server->tiling_enabled == enabled)
+        return;
+    server->tiling_enabled = enabled;
+    // Most recently focused first, so the focused window gets the largest tile.
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (enabled && wants_tiling(toplevel))
+            tile_toplevel(toplevel, NULL, NULL, false);
+        else if (!enabled && toplevel->tiled)
+            untile_toplevel(toplevel, true);
+        else if (!enabled && toplevel->arranged && toplevel->arrangement == SH_NONE)
+            restore_toplevel(toplevel); // left the tiling while minimized
+    }
+    wlr_log(WLR_INFO, "Tiling %s", enabled ? "on" : "off");
+    notify_subscribers(server);
 }
 
 static void foreign_activate(struct wl_listener *listener, void *data) {
@@ -1466,6 +1663,10 @@ static void foreign_maximize(struct wl_listener *listener, void *data) {
     if (!event->maximized) {
         restore_toplevel(toplevel);
         return;
+    }
+    if (toplevel->tiled) {
+        toplevel->floating = true;
+        untile_toplevel(toplevel, false);
     }
     struct wlr_output *output = toplevel_output(toplevel);
     if (!output)
@@ -1652,6 +1853,10 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 }
 
 static void maximize_toplevel(struct sh_toplevel *toplevel, bool maximized) {
+    if (toplevel->tiled) {
+        toplevel_refresh(toplevel); // Tiles ignore client maximize requests, as in Hyprland.
+        return;
+    }
     if (!maximized) {
         restore_toplevel(toplevel);
         return;
@@ -1665,6 +1870,8 @@ static void maximize_toplevel(struct sh_toplevel *toplevel, bool maximized) {
 }
 
 static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool maximized) {
+    struct sh_server *server = toplevel->server;
+    struct sh_toplevel *previous = server->focused_toplevel;
     toplevel->workspace = toplevel->server->workspace;
     int offset = 40 + 32 * (wl_list_length(&toplevel->server->toplevels) % 8);
     int x = offset, y = offset;
@@ -1695,6 +1902,16 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
 
     publish_toplevel(toplevel);
+    toplevel->floating = toplevel_is_dialog(toplevel);
+    if (wants_tiling(toplevel)) {
+        // As in Hyprland: split the focused tile, else the tile under the pointer.
+        bool split_focused = previous && previous->tiled && toplevel_visible(previous);
+        struct wlr_output *output =
+            split_focused ? tiled_output(previous)
+                          : wlr_output_layout_output_at(server->output_layout, server->cursor->x,
+                                                        server->cursor->y);
+        tile_toplevel(toplevel, output, split_focused ? previous : NULL, true);
+    }
     focus_toplevel(toplevel);
     if (fullscreen)
         set_fullscreen(toplevel, true);
@@ -1714,6 +1931,7 @@ static void unmap_toplevel(struct sh_toplevel *toplevel) {
     }
 
     toplevel->fullscreen = false;
+    untile_toplevel(toplevel, false);
     bool was_focused = toplevel->server->focused_toplevel == toplevel;
     if (was_focused)
         deactivate_toplevel(toplevel->server);
@@ -1760,11 +1978,19 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
     if (toplevel->fullscreen)
         return;
 
+    // Resizing a tile moves its splits; moving one lifts it out until it is dropped.
+    bool tiled_resize = toplevel->tiled && mode == SH_CURSOR_RESIZE;
+    bool retile = toplevel->tiled && mode == SH_CURSOR_MOVE;
+    if (retile)
+        untile_toplevel(toplevel, false);
     bool was_arranged = toplevel->arranged;
-    toplevel->arranged = false;
-    if (toplevel->foreign)
-        wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
-    toplevel_set_states(toplevel, false, 0);
+    if (!tiled_resize) {
+        toplevel->arranged = false;
+        if (toplevel->foreign)
+            wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
+        toplevel_set_states(toplevel, false, 0);
+    }
+    server->grab_retile = retile;
     server->grabbed_toplevel = toplevel;
     server->cursor_mode = mode;
 
@@ -1880,8 +2106,9 @@ static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen) {
                            toplevel->fullscreen_restore.width, toplevel->fullscreen_restore.height);
         wlr_scene_node_reparent(&toplevel->scene_tree->node, server->windows);
         // The usable area may have changed while this window covered the output.
-        struct wlr_output *output = toplevel_output(toplevel);
-        if (toplevel->arranged && output)
+        struct wlr_output *output =
+            toplevel->tiled ? tiled_output(toplevel) : toplevel_output(toplevel);
+        if ((toplevel->arranged || toplevel->tiled) && output)
             reflow_output(server, output);
     }
     if (server->focused_toplevel == toplevel || fullscreen)
@@ -2037,7 +2264,7 @@ static void xwayland_request_configure(struct wl_listener *listener, void *data)
         return;
     }
     // Placement belongs to the compositor; floating windows may still choose their size.
-    if (toplevel->fullscreen || toplevel->arranged) {
+    if (toplevel->fullscreen || toplevel->arranged || toplevel->tiled) {
         toplevel_refresh(toplevel);
         return;
     }
@@ -2294,6 +2521,8 @@ struct sh_control_client {
     struct sh_server *server;
     int fd;
     struct wl_event_source *source;
+    bool subscribed; // "subscribe": stays open and receives the state after each change
+    struct wl_list link;
     size_t length;
     char request[512];
 };
@@ -2301,7 +2530,7 @@ struct sh_control_client {
 static void control_reply(int fd, const char *text) {
     size_t length = strlen(text);
     while (length > 0) {
-        ssize_t written = write(fd, text, length);
+        ssize_t written = send(fd, text, length, MSG_NOSIGNAL);
         if (written < 0 && errno == EINTR)
             continue;
         if (written <= 0)
@@ -2314,13 +2543,16 @@ static void control_reply(int fd, const char *text) {
 static void control_describe_windows(struct sh_server *server, int fd) {
     control_reply(fd, "ok\n");
     struct sh_toplevel *toplevel;
-    // workspace, focused, minimized, app_id, title — one window per line.
+    // workspace, focused, minimized, tiled, x, y, width, height, app_id, title — one per line.
     wl_list_for_each_reverse(toplevel, &server->toplevels, link) {
         char line[1024];
         const char *app_id = toplevel_app_id(toplevel), *title = toplevel_title(toplevel);
-        snprintf(line, sizeof(line), "%d\t%d\t%d\t%s\t%s\n", toplevel->workspace + 1,
-                 server->focused_toplevel == toplevel, toplevel->minimized, app_id ? app_id : "",
-                 title ? title : "");
+        struct wlr_box geometry = toplevel_geometry(toplevel);
+        snprintf(line, sizeof(line), "%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+                 toplevel->workspace + 1, server->focused_toplevel == toplevel, toplevel->minimized,
+                 toplevel->tiled, toplevel->scene_tree->node.x + geometry.x,
+                 toplevel->scene_tree->node.y + geometry.y, geometry.width, geometry.height,
+                 app_id ? app_id : "", title ? title : "");
         for (char *c = line; c[0] && c[1]; ++c)
             if (*c == '\n' || *c == '\r')
                 *c = ' ';
@@ -2333,6 +2565,10 @@ static void control_handle(struct sh_server *server, int fd, const char *request
         char reply[32];
         snprintf(reply, sizeof(reply), "ok\n%d\n", server->workspace + 1);
         control_reply(fd, reply);
+        return;
+    }
+    if (!strcmp(request, "get tiling")) {
+        control_reply(fd, server->tiling_enabled ? "ok\non\n" : "ok\noff\n");
         return;
     }
     if (!strcmp(request, "get windows")) {
@@ -2358,13 +2594,40 @@ static void control_handle(struct sh_server *server, int fd, const char *request
 }
 
 static void control_client_close(struct sh_control_client *client) {
+    if (client->subscribed)
+        wl_list_remove(&client->link);
     wl_event_source_remove(client->source);
     close(client->fd);
     free(client);
 }
 
+/* Subscribers get "tiling on|off" and "workspace N" lines; a subscriber that cannot keep up
+ * is dropped rather than blocking the compositor. */
+static bool control_send_state(struct sh_control_client *client) {
+    struct sh_server *server = client->server;
+    char state[64];
+    int length = snprintf(state, sizeof(state), "tiling %s\nworkspace %d\n",
+                          server->tiling_enabled ? "on" : "off", server->workspace + 1);
+    return send(client->fd, state, (size_t)length, MSG_NOSIGNAL | MSG_DONTWAIT) == length;
+}
+
+static void notify_subscribers(struct sh_server *server) {
+    struct sh_control_client *client, *temporary;
+    wl_list_for_each_safe(client, temporary, &server->subscribers, link) {
+        if (!control_send_state(client))
+            control_client_close(client);
+    }
+}
+
 static int control_client_readable(int fd, uint32_t mask, void *data) {
     struct sh_control_client *client = data;
+    if (client->subscribed) {
+        char ignored[64];
+        ssize_t count = read(fd, ignored, sizeof(ignored));
+        if (count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR))
+            control_client_close(client);
+        return 0;
+    }
     ssize_t count =
         read(fd, client->request + client->length, sizeof(client->request) - 1 - client->length);
     if (count < 0 && (errno == EAGAIN || errno == EINTR))
@@ -2380,6 +2643,13 @@ static int control_client_readable(int fd, uint32_t mask, void *data) {
         return 0;
     if (newline)
         *newline = '\0';
+    if (newline && !strcmp(client->request, "subscribe")) {
+        client->subscribed = true;
+        wl_list_insert(&client->server->subscribers, &client->link);
+        if (send(fd, "ok\n", 3, MSG_NOSIGNAL | MSG_DONTWAIT) != 3 || !control_send_state(client))
+            control_client_close(client);
+        return 0;
+    }
     // Replies are small; a blocking write keeps the protocol simple.
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
     if (newline)
@@ -2441,6 +2711,10 @@ static void open_control_socket(struct sh_server *server, const char *wayland_so
 }
 
 static void close_control_socket(struct sh_server *server) {
+    struct sh_control_client *client, *temporary;
+    wl_list_for_each_safe(client, temporary, &server->subscribers, link) {
+        control_client_close(client);
+    }
     if (server->control_source)
         wl_event_source_remove(server->control_source);
     if (server->control_fd >= 0)
@@ -2484,6 +2758,11 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
         setenv("WLR_HEADLESS_OUTPUTS", "1", 1);
 
     struct sh_server server = {.callbacks = callbacks};
+    wl_list_init(&server.subscribers);
+    server.tiling = sh_tiling_create();
+    if (!server.tiling)
+        return 1;
+    server.tiling_enabled = callbacks->settings(callbacks->userdata)->tiling;
 
     server.wl_display = wl_display_create();
     if (!server.wl_display)
@@ -2684,5 +2963,6 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wlr_allocator_destroy(server.allocator);
     wlr_renderer_destroy(server.renderer);
     wl_display_destroy(server.wl_display);
+    sh_tiling_destroy(server.tiling);
     return 0;
 }

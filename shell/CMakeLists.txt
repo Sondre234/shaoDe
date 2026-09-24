@@ -1,4 +1,4 @@
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-unix-2.0)
 pkg_check_modules(SHELL_WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
 if(NOT SHAODE_SHELL_PREVIEW_ONLY)
@@ -14,7 +14,7 @@ add_executable(shaode-shell main.cpp controller.cpp controller.hpp task_model.cp
     ${PROJECT_BINARY_DIR}/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h)
 set_target_properties(shaode-shell PROPERTIES AUTOMOC ON RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
 target_include_directories(shaode-shell PRIVATE ${PROJECT_BINARY_DIR})
-target_link_libraries(shaode-shell PRIVATE shaode_config Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
+target_link_libraries(shaode-shell PRIVATE shaode_config Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick
     PkgConfig::GIO PkgConfig::SHELL_WAYLAND)
 target_compile_definitions(shaode-shell PRIVATE QT_NO_KEYWORDS)
 target_compile_options(shaode-shell PRIVATE -Wall -Wextra -Wpedantic)
@@ -38,7 +38,7 @@ if(BUILD_TESTING)
     target_include_directories(shell_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
     target_compile_definitions(shell_ui_test PRIVATE QT_NO_KEYWORDS SHAODE_LAYER_SHELL=0)
     target_compile_options(shell_ui_test PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(shell_ui_test PRIVATE shaode_config Qt6::Test Qt6::Quick Qt6::Qml
+    target_link_libraries(shell_ui_test PRIVATE shaode_config Qt6::Test Qt6::Network Qt6::Quick Qt6::Qml
         PkgConfig::GIO PkgConfig::SHELL_WAYLAND)
     qt_add_resources(shell_ui_test ui_test_qml PREFIX "/shell" BASE ${CMAKE_CURRENT_SOURCE_DIR}
         FILES Panel.qml Desktop.qml)

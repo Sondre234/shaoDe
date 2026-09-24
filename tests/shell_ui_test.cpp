@@ -2,6 +2,8 @@
 #include "view.hpp"
 #include <QFile>
 #include <QGuiApplication>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QQuickItem>
 #include <QTemporaryDir>
 #include <QTest>
@@ -26,6 +28,30 @@ int main(int argc, char **argv) {
              .arg(QString::fromLocal8Bit(argv[1]), marker))
             .toUtf8());
     file.close();
+    // A stand-in for the compositor's control socket.
+    QLocalServer compositor;
+    QLocalSocket *subscriber = nullptr;
+    bool toggled = false;
+    QObject::connect(&compositor, &QLocalServer::newConnection, [&] {
+        auto *client = compositor.nextPendingConnection();
+        QObject::connect(client, &QLocalSocket::readyRead, [&, client] {
+            if (!client->canReadLine())
+                return;
+            auto request = client->readLine();
+            if (request == "subscribe\n") {
+                subscriber = client;
+                client->write("ok\ntiling off\nworkspace 1\n");
+            } else if (request == "toggle_tiling\n") {
+                toggled = true;
+                client->write("ok\n");
+                client->disconnectFromServer();
+                subscriber->write("tiling on\nworkspace 1\n");
+            }
+        });
+    });
+    if (!compositor.listen(directory.filePath("control.sock")))
+        return 1;
+    qputenv("SHAODE_SOCKET", compositor.fullServerName().toLocal8Bit());
     ShellController controller(config.toStdString());
     ShellView view(controller, app.primaryScreen(), false, true);
     if (view.status() != QQuickView::Ready)
@@ -57,5 +83,19 @@ int main(int argc, char **argv) {
         std::cerr << "launcher remained open after launching\n";
         return 1;
     }
-    std::cout << "Hover/click, launcher keyboard focus, search, and command launch passed\n";
+    auto *tiling = view.rootObject()->findChild<QQuickItem *>("tilingToggle");
+    if (!tiling || !QTest::qWaitFor([&] { return controller.tilingAvailable(); }) ||
+        controller.tiling()) {
+        std::cerr << "tiling state did not arrive from the control socket\n";
+        return 1;
+    }
+    const QPoint toggle =
+        tiling->mapToScene(QPointF(tiling->width() / 2, tiling->height() / 2)).toPoint();
+    QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, toggle);
+    if (!QTest::qWaitFor([&] { return toggled && controller.tiling(); })) {
+        std::cerr << "the tiling button did not toggle tiling\n";
+        return 1;
+    }
+    std::cout << "Hover/click, launcher keyboard focus, search, command launch, and tiling toggle "
+                 "passed\n";
 }

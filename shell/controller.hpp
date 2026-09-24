@@ -2,6 +2,7 @@
 #include "shaode/config.hpp"
 #include "task_model.hpp"
 #include <QColor>
+#include <QLocalSocket>
 #include <QObject>
 #include <QUrl>
 #include <QVariantList>
@@ -20,6 +21,8 @@ class ShellController : public QObject {
     Q_PROPERTY(QVariantList apps READ apps NOTIFY appsChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(TaskModel *tasks READ tasks CONSTANT)
+    Q_PROPERTY(bool tiling READ tiling NOTIFY tilingChanged)
+    Q_PROPERTY(bool tilingAvailable READ tilingAvailable NOTIFY tilingChanged)
   public:
     explicit ShellController(std::filesystem::path path, QObject *parent = nullptr);
     ~ShellController() override;
@@ -34,16 +37,20 @@ class ShellController : public QObject {
     QVariantList apps() const;
     QString error() const { return error_; }
     TaskModel *tasks() { return &tasks_; }
+    bool tiling() const { return tiling_; }
+    bool tilingAvailable() const { return subscribed_; }
     Q_INVOKABLE bool launch(const QString &id);
     Q_INVOKABLE QVariantList searchApps(const QString &query) const;
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void reload();
     Q_INVOKABLE void clearError();
+    Q_INVOKABLE void toggleTiling();
   Q_SIGNALS:
     void configChanged();
     void appsChanged();
     void errorChanged();
     void disabled();
+    void tilingChanged();
 
   private:
     struct App {
@@ -57,6 +64,10 @@ class ShellController : public QObject {
     TaskModel tasks_;
     std::vector<App> apps_;
     QString error_;
+    // Compositor state from its control socket ($SHAODE_SOCKET), kept open by "subscribe".
+    QLocalSocket *state_ = nullptr;
+    bool subscribed_ = false, tiling_ = false;
+    void subscribe();
     void report(const QString &message);
     void clearApps();
     static QVariantMap record(const App &app);

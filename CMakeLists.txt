@@ -19,7 +19,7 @@ option(SHAODE_INSTALL_SESSION "Install the experimental display-manager session 
 option(SHAODE_BUILD_SHELL "Build the Qt Quick desktop shell" ON)
 option(SHAODE_SHELL_PREVIEW_ONLY "Build only the shell UI preview without LayerShellQt" OFF)
 
-add_library(shaode_config src/config.cpp src/layout.cpp)
+add_library(shaode_config src/config.cpp src/layout.cpp src/tiling.cpp)
 target_include_directories(shaode_config PUBLIC include)
 target_link_libraries(shaode_config PRIVATE PkgConfig::LUA PUBLIC PkgConfig::XKB)
 target_compile_options(shaode_config PRIVATE -Wall -Wextra -Wpedantic)
@@ -32,6 +32,9 @@ if(BUILD_TESTING)
     add_executable(layout_tests tests/layout_tests.cpp)
     target_link_libraries(layout_tests PRIVATE shaode_config)
     add_test(NAME layout COMMAND layout_tests)
+    add_executable(tiling_tests tests/tiling_tests.cpp)
+    target_link_libraries(tiling_tests PRIVATE shaode_config)
+    add_test(NAME tiling COMMAND tiling_tests)
 endif()
 option(SHAODE_BUILD_COMPOSITOR "Build the wlroots compositor" ON)
 if(SHAODE_BUILD_COMPOSITOR)
@@ -141,6 +144,11 @@ if(SHAODE_BUILD_COMPOSITOR)
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
             ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
         set_tests_properties(workspaces PROPERTIES TIMEOUT 60)
+        add_test(NAME tiling_smoke COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/tiling_smoke.py
+            $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
+            ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+        set_tests_properties(tiling_smoke PROPERTIES TIMEOUT 60)
         set(LOCK_XML ${PROTOCOL_DIR}/staging/ext-session-lock/ext-session-lock-v1.xml)
         add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-client-protocol.h
             COMMAND ${WAYLAND_SCANNER} client-header ${LOCK_XML}

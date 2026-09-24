@@ -201,6 +201,35 @@ Item {
                     } }
                 }
             }
+            Button {
+                id: tilingToggle
+                objectName: "tilingToggle"
+                Layout.preferredWidth: 40; Layout.preferredHeight: bar.height - 10
+                enabled: shell.tilingAvailable
+                opacity: enabled ? 1 : 0.4
+                onClicked: { root.closeMenus(); shell.toggleTiling() }
+                Accessible.name: shell.tiling ? "Tiling on" : "Tiling off"
+                background: Rectangle {
+                    radius: 7
+                    color: shell.tiling ? Qt.lighter(shell.panelColor, 1.8) : (tilingToggle.hovered ? Qt.lighter(shell.panelColor, 1.55) : "transparent")
+                }
+                // On: a dwindle split in the accent colour. Off: two overlapping windows.
+                contentItem: Item {
+                    Item {
+                        anchors.centerIn: parent; width: 22; height: 16
+                        visible: shell.tiling
+                        Rectangle { width: 10; height: 16; radius: 2; color: shell.accent }
+                        Rectangle { x: 12; width: 10; height: 7; radius: 2; color: shell.accent }
+                        Rectangle { x: 12; y: 9; width: 10; height: 7; radius: 2; color: shell.accent }
+                    }
+                    Item {
+                        anchors.centerIn: parent; width: 22; height: 16
+                        visible: !shell.tiling
+                        Rectangle { width: 15; height: 11; radius: 2; color: "transparent"; border.color: shell.textColor; border.width: 2 }
+                        Rectangle { x: 7; y: 5; width: 15; height: 11; radius: 2; color: tilingToggle.hovered ? Qt.lighter(shell.panelColor, 1.55) : shell.panelColor; border.color: shell.textColor; border.width: 2 }
+                    }
+                }
+            }
             Text {
                 id: clock
                 property date now: new Date()

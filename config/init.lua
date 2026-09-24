@@ -8,7 +8,11 @@ return {
     appearance = { background = "#19212e" },
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
-    layout = { gap = 8, workspaces = 4 },
+    layout = {
+        gap = 8,
+        workspaces = 4,
+        tiling = false, -- start with automatic tiling; the panel button toggles it
+    },
     outputs = {
         -- Left to right by connector name; unlisted monitors follow on the right.
         order = { "HDMI-A-1", "DP-3", "DP-1" },
@@ -37,6 +41,8 @@ return {
         { mods = { mod }, key = "Up", action = "maximize" },
         { mods = { mod }, key = "Down", action = "restore" },
         { mods = { mod }, key = "t", action = "tile" },
+        { mods = { mod, "Shift" }, key = "t", action = "toggle_tiling" },
+        { mods = { mod, "Shift" }, key = "f", action = "toggle_floating" },
         { mods = { mod }, key = "F11", action = "fullscreen" },
         -- Lock with any ext-session-lock client, e.g.:
         -- { mods = { "Super" }, key = "l", action = "spawn", command = { "swaylock" } },

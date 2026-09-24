@@ -129,3 +129,14 @@ scaling, and server-side decorations.
 
 Still untested on hardware: VT switching on NVIDIA, hotplug, suspend/resume, lid
 close, and brightness/volume keys.
+
+## Tiling checkpoint
+
+Added 2026-09-24. `ctest` covers the dwindle layout on its own (splits, gaps,
+bounds, non-overlap, removal, pointer-side placement, split resizing, separate
+trees per output and workspace) and in a headless compositor with real clients:
+the toggle, splitting on map, refill after moving a tile to another workspace,
+`toggle_floating`, restoring floating sizes, and `subscribe` events. The shell UI
+test clicks the panel button against a stand-in control socket. Mouse resizing
+and drag-to-retile of tiles have not yet been exercised in a nested or physical
+session.
