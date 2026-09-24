@@ -1,4 +1,4 @@
-# shaoDe
+<h1 align="center"><img src="docs/banner.svg" alt="shaoDe — mouse-first Wayland desktop" width="800"></h1>
 
 A mouse-first Wayland desktop with Lua configuration, floating windows,
 edge snapping, and optional Hyprland-style automatic tiling. C++ owns configuration and desktop policy;
