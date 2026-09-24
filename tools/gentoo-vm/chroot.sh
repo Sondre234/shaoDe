@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Provisions the Gentoo system from inside its chroot. Invoked by builder.sh;
 # safe to rerun.
 set -eo pipefail

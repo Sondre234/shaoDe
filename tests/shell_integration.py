@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Verify real Qt layer surfaces, reserved space, and reload on a private compositor."""
 import os
 from pathlib import Path

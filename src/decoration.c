@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaode/decoration.h"
 #include <drm_fourcc.h>
 #include <math.h>

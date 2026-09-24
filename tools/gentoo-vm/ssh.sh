@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # SSH into the running Gentoo test VM; arguments run as a remote command.
 set -euo pipefail
 

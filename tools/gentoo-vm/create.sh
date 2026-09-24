@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Build or update the Gentoo test VM disk image.
 #
 # Runs as your user; the privileged work happens in a Docker container

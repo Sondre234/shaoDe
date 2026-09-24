@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Exercise ext-session-lock-v1 on a private headless compositor."""
 import os
 from pathlib import Path

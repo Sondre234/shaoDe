@@ -251,6 +251,11 @@ between release series. Develop nested inside the existing Wayland session first
 - [Hyprland dwindle layout](https://wiki.hypr.land/configuring/layouts/dwindle-layout/),
   the model for shaoDe's tiling (reimplemented, no Hyprland code is included)
 
+## License
+
+shaoDe is free software, licensed under the GNU General Public License,
+version 3 or (at your option) any later version. See [LICENSE](LICENSE).
+
 The compositor adapter derives from TinyWL. Its upstream MIT license is
-preserved in [vendor/tinywl/LICENSE](vendor/tinywl/LICENSE). No project-wide
-license has been selected yet.
+preserved in [vendor/tinywl/LICENSE](vendor/tinywl/LICENSE). The protocol
+files in `protocols/` keep the licenses stated in each file.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Load and render both QML roots without a desktop connection."""
 import os
 from pathlib import Path

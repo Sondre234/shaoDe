@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Toggle dwindle tiling through the control socket and watch real windows follow it."""
 import os
 from pathlib import Path

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Run X11 clients through XWayland on a private headless compositor."""
 import os
 from pathlib import Path

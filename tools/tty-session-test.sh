@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Try the standalone DRM/libinput session on real hardware. Run from a text console (not inside
 # a graphical session). Logs to ~/.local/state/shaode/tty-test-latest.log and exits on its own
 # after SHAODE_TEST_LIMIT seconds (default 300) in case input stops working.

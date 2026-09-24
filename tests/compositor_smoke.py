@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Exercise a real compositor in an isolated headless runtime directory."""
 import os
 from pathlib import Path

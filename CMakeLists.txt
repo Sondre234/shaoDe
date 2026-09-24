@@ -101,6 +101,7 @@ if(SHAODE_BUILD_COMPOSITOR)
     install(TARGETS shaode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES config/init.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/shaode)
     install(FILES README.md docs/gentoo.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+    install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/shaode)
     install(FILES vendor/tinywl/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/shaode
         RENAME TinyWL-LICENSE)
     install(DIRECTORY protocols/ DESTINATION ${CMAKE_INSTALL_DATADIR}/shaode/protocols)

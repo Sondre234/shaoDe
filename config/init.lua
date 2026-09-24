@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
 -- shaoDe configuration, API version 1.
 -- Launch commands are argument arrays, never shell strings.
 -- Hyprland-style Super shortcuts. A nested session inside a host that grabs Super

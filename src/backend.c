@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later AND MIT */
 /* Derived from wlroots TinyWL 0.20.2; see vendor/tinywl/LICENSE. */
 #define _GNU_SOURCE // accept4
 #include "shaode/backend.h"

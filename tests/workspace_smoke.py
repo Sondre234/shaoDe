@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Drive workspaces through the control socket and the taskbar protocol."""
 import os
 from pathlib import Path

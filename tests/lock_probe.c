@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* Session-lock client: locking, rejection, focus isolation, unlock, and abandonment. */
 #define _GNU_SOURCE
 #include "ext-session-lock-v1-client-protocol.h"

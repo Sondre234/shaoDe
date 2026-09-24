@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* X11 client exercising XWayland mapping, focus, fullscreen, and close. */
 #include <poll.h>
 #include <stdbool.h>

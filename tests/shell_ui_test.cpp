@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "controller.hpp"
 #include "view.hpp"
 #include <QFile>

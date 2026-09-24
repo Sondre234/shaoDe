@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Runs inside the privileged builder container started by create.sh.
 # Partitions /vm/disk.img on first use, unpacks a verified stage3, then
 # provisions the system through chroot.sh. Each step is skipped when already

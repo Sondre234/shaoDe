@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copy the working tree into the running VM (~/shaoDe), then build and test
 # it there. Build directories and editor state are not copied.
 set -euo pipefail

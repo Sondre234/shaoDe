@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Boot the Gentoo test VM.
 #   run.sh             window with virgl 3D acceleration (virtio-gpu)
 #   run.sh --headless  no window, standard VGA; use ssh.sh
