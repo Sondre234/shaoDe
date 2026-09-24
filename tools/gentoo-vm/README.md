@@ -6,8 +6,9 @@ build shaoDe against Gentoo's packages and to exercise the standalone
 
 Host requirements: KVM, `qemu-system-x86_64`, OVMF (edk2) firmware, rsync,
 ssh, and Docker access (membership in the `docker` group). The windowed mode
-needs QEMU's virgl GPU devices; Arch packages them separately as
-`qemu-hw-display-virtio-vga-gl` and `qemu-hw-display-virtio-gpu-gl`. No sudo is needed:
+needs QEMU's virgl GPU devices; Arch packages them as separate modules, and
+the `-gl` ones need their base modules too:
+`qemu-hw-display-virtio-{gpu,vga,gpu-pci}{,-gl}`. No sudo is needed:
 the disk image is partitioned and provisioned inside a privileged
 `gentoo/stage3` container using loop devices.
 
