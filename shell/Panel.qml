@@ -50,6 +50,7 @@ Item {
             }
             TextField {
                 id: search
+                objectName: "applicationSearch"
                 Layout.fillWidth: true
                 Layout.preferredHeight: 42
                 placeholderText: "Search applications"
@@ -145,7 +146,7 @@ Item {
                 id: start
                 Layout.preferredWidth: 44; Layout.preferredHeight: bar.height - 10
                 onClicked: root.launcherOpen = !root.launcherOpen
-                ToolTip.visible: hovered; ToolTip.text: "Applications"
+                Accessible.name: "Applications"
                 background: Rectangle { radius: 7; color: start.hovered || root.launcherOpen ? Qt.lighter(shell.panelColor, 1.8) : "transparent" }
                 contentItem: Item {
                     Grid {
@@ -160,7 +161,7 @@ Item {
                     required property var modelData
                     Layout.preferredWidth: 40; Layout.preferredHeight: bar.height - 10
                     onClicked: { if (shell.launch(modelData.appId)) root.closeMenus() }
-                    ToolTip.visible: hovered; ToolTip.text: modelData.name
+                    Accessible.name: modelData.name
                     background: Rectangle { radius: 7; color: parent.hovered ? Qt.lighter(shell.panelColor, 1.55) : "transparent" }
                     contentItem: Image { source: "image://icons/" + modelData.icon; sourceSize: Qt.size(24, 24); fillMode: Image.PreserveAspectFit }
                 }
@@ -181,7 +182,7 @@ Item {
                     width: Math.min(185, Math.max(92, taskList.width / Math.max(1, taskList.count) - 4))
                     height: bar.height - 10; y: 5
                     onClicked: { root.closeMenus(); shell.tasks.activate(taskId) }
-                    ToolTip.visible: hovered; ToolTip.text: title
+                    Accessible.name: title
                     background: Rectangle {
                         radius: 6
                         color: taskButton.active ? Qt.lighter(shell.panelColor, 1.7) : (taskButton.hovered ? Qt.lighter(shell.panelColor, 1.4) : "transparent")
@@ -206,7 +207,7 @@ Item {
             Button {
                 Layout.preferredWidth: 14; Layout.fillHeight: true
                 onClicked: { root.closeMenus(); shell.tasks.showDesktop() }
-                ToolTip.visible: hovered; ToolTip.text: "Show desktop"
+                Accessible.name: "Show desktop"
                 background: Rectangle { color: parent.hovered ? shell.accent : Qt.lighter(shell.panelColor, 1.6); width: 3; anchors.right: parent.right }
             }
         }

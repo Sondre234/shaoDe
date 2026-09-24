@@ -41,7 +41,7 @@ Rectangle {
                 required property var modelData
                 width: 88; height: 84
                 onDoubleClicked: shell.launch(modelData.appId)
-                ToolTip.visible: hovered; ToolTip.text: "Double-click to open " + modelData.name
+                Accessible.name: "Double-click to open " + modelData.name
                 background: Rectangle { radius: 8; color: parent.hovered ? "#284b638a" : "transparent"; border.color: parent.hovered ? "#557da8ff" : "transparent" }
                 contentItem: Column {
                     spacing: 6

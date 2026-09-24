@@ -75,6 +75,19 @@ int main(int argc, char **argv) {
                         std::cerr << error.toString().toStdString() << '\n';
                     throw std::runtime_error("could not load shell QML");
                 }
+                auto reportFrame = [window = view.get()] {
+                    QObject::connect(
+                        window, &QQuickWindow::frameSwapped, window,
+                        [window] {
+                            std::cerr
+                                << "shaoDe surface rendered: " << window->title().toStdString()
+                                << '\n';
+                        },
+                        Qt::SingleShotConnection);
+                };
+                reportFrame();
+                QObject::connect(&controller, &ShellController::configChanged, view.get(),
+                                 reportFrame);
                 view->show();
                 if (preview && !desktop)
                     view->rootObject()->setProperty("launcherOpen", true);

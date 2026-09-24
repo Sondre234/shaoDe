@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <gio/gdesktopappinfo.h>
+#include <iostream>
 
 ShellController::ShellController(std::filesystem::path path, QObject *parent)
     : QObject(parent), path_(std::move(path)), config_(shaode::load_config(path_)), tasks_(this) {
@@ -163,6 +164,7 @@ void ShellController::reload() {
         if (!enabled())
             Q_EMIT disabled();
     } catch (const std::exception &error) {
+        std::cerr << "Shell reload rejected: " << error.what() << '\n';
         report("Configuration unchanged: " + QString::fromUtf8(error.what()));
     }
 }

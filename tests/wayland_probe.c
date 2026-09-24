@@ -27,7 +27,7 @@ struct probe {
     struct zwlr_foreign_toplevel_handle_v1 *handle;
     struct wl_seat *seat;
     struct wl_output *output;
-    int output_height;
+    int output_height, panel_height;
     bool panel_ready, handle_minimized, handle_active, handle_closed, title_seen;
     struct wl_shm *shm;
     struct xdg_wm_base *shell;
@@ -37,7 +37,7 @@ struct probe {
     struct wl_callback *frame;
     struct buffer *buffers;
     int width, height, stage;
-    bool maximized, done, external_control;
+    bool maximized, done, external_control, external_panel;
 };
 static void die(const char *message) {
     fprintf(stderr, "wayland probe: %s\n", message);
@@ -153,7 +153,7 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time) 
     } else if (probe->stage == 1 && probe->maximized) {
         if (probe->width <= 320 || probe->height <= 240)
             die("maximize did not resize window");
-        if (probe->height != probe->output_height - 48)
+        if (probe->height != probe->output_height - probe->panel_height)
             die("maximize covered the reserved panel area");
         puts("maximize respected panel reservation and rendered");
         probe->stage = 2;
@@ -246,11 +246,18 @@ static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
 static const struct xdg_toplevel_listener toplevel_listener = {.configure = toplevel_configure,
                                                                .close = toplevel_close};
 int main(int argc, char **argv) {
-    struct probe probe = {.width = 320, .height = 240};
+    struct probe probe = {.width = 320, .height = 240, .panel_height = 48};
     if (argc == 2 && !strcmp(argv[1], "--external-control"))
         probe.external_control = true;
-    else if (argc != 1)
-        die("usage: wayland_probe [--external-control]");
+    else if (argc == 3 && !strcmp(argv[1], "--external-panel")) {
+        char *end;
+        long height = strtol(argv[2], &end, 10);
+        if (*end || height < 0 || height > 100)
+            die("invalid external panel height");
+        probe.external_panel = true;
+        probe.panel_height = (int)height;
+    } else if (argc != 1)
+        die("usage: wayland_probe [--external-control | --external-panel HEIGHT]");
     struct wl_display *display = wl_display_connect(NULL);
     if (!display)
         die("cannot connect to compositor");
@@ -262,22 +269,24 @@ int main(int argc, char **argv) {
         die("required globals missing");
     if (!probe.layer_shell || !probe.manager || !probe.seat || !probe.output)
         die("desktop protocols missing");
-    probe.panel_surface = wl_compositor_create_surface(probe.compositor);
-    probe.panel =
-        zwlr_layer_shell_v1_get_layer_surface(probe.layer_shell, probe.panel_surface, probe.output,
-                                              ZWLR_LAYER_SHELL_V1_LAYER_TOP, "shaode-test-panel");
-    zwlr_layer_surface_v1_add_listener(probe.panel, &panel_listener, &probe);
-    zwlr_layer_surface_v1_set_size(probe.panel, 0, 48);
-    zwlr_layer_surface_v1_set_anchor(probe.panel, ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-                                                      ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-                                                      ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
-    zwlr_layer_surface_v1_set_exclusive_zone(probe.panel, 48);
-    wl_surface_commit(probe.panel_surface);
-    while (!probe.panel_ready)
-        if (wl_display_dispatch(display) < 0)
-            die("panel setup failed");
-    if (wl_display_roundtrip(display) < 0)
-        die("panel mapping failed");
+    if (!probe.external_panel) {
+        probe.panel_surface = wl_compositor_create_surface(probe.compositor);
+        probe.panel = zwlr_layer_shell_v1_get_layer_surface(
+            probe.layer_shell, probe.panel_surface, probe.output, ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            "shaode-test-panel");
+        zwlr_layer_surface_v1_add_listener(probe.panel, &panel_listener, &probe);
+        zwlr_layer_surface_v1_set_size(probe.panel, 0, 48);
+        zwlr_layer_surface_v1_set_anchor(probe.panel, ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+                                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+        zwlr_layer_surface_v1_set_exclusive_zone(probe.panel, 48);
+        wl_surface_commit(probe.panel_surface);
+        while (!probe.panel_ready)
+            if (wl_display_dispatch(display) < 0)
+                die("panel setup failed");
+        if (wl_display_roundtrip(display) < 0)
+            die("panel mapping failed");
+    }
     probe.surface = wl_compositor_create_surface(probe.compositor);
     probe.xdg_surface = xdg_wm_base_get_xdg_surface(probe.shell, probe.surface);
     xdg_surface_add_listener(probe.xdg_surface, &surface_listener, &probe);
@@ -306,8 +315,10 @@ int main(int argc, char **argv) {
     }
     if (!probe.handle_closed)
         die("taskbar window handle survived unmapping");
-    zwlr_layer_surface_v1_destroy(probe.panel);
-    wl_surface_destroy(probe.panel_surface);
+    if (probe.panel) {
+        zwlr_layer_surface_v1_destroy(probe.panel);
+        wl_surface_destroy(probe.panel_surface);
+    }
     zwlr_layer_shell_v1_destroy(probe.layer_shell);
     zwlr_foreign_toplevel_manager_v1_destroy(probe.manager);
     wl_seat_destroy(probe.seat);

@@ -29,6 +29,22 @@ qt_add_resources(shaode-shell shell_qml PREFIX "/shell" BASE ${CMAKE_CURRENT_SOU
     FILES Panel.qml Desktop.qml)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
+    add_executable(shell_ui_test ${PROJECT_SOURCE_DIR}/tests/shell_ui_test.cpp
+        controller.cpp controller.hpp view.cpp view.hpp task_model.cpp task_model.hpp
+        ${PROJECT_BINARY_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.c
+        ${PROJECT_BINARY_DIR}/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h)
+    set_target_properties(shell_ui_test PROPERTIES AUTOMOC ON)
+    target_include_directories(shell_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
+    target_compile_definitions(shell_ui_test PRIVATE QT_NO_KEYWORDS SHAODE_LAYER_SHELL=0)
+    target_compile_options(shell_ui_test PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(shell_ui_test PRIVATE shaode_config Qt6::Test Qt6::Quick Qt6::Qml
+        PkgConfig::GIO PkgConfig::SHELL_WAYLAND)
+    qt_add_resources(shell_ui_test ui_test_qml PREFIX "/shell" BASE ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES Panel.qml Desktop.qml)
+    add_test(NAME shell_ui COMMAND shell_ui_test ${CMAKE_COMMAND})
+    set_tests_properties(shell_ui PROPERTIES TIMEOUT 20
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
     add_executable(task_model_test ${PROJECT_SOURCE_DIR}/tests/task_model_test.cpp
         task_model.cpp task_model.hpp
         ${PROJECT_BINARY_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.c
@@ -47,4 +63,11 @@ if(BUILD_TESTING)
         ${PROJECT_SOURCE_DIR}/tests/shell_preview.py $<TARGET_FILE:shaode-shell>
         ${PROJECT_SOURCE_DIR}/config/init.lua)
     set_tests_properties(shell_preview PROPERTIES TIMEOUT 20)
+    if(NOT SHAODE_SHELL_PREVIEW_ONLY)
+        add_test(NAME shell_integration COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/shell_integration.py $<TARGET_FILE:shaode>
+            $<TARGET_FILE:shaode-shell> $<TARGET_FILE:wayland_probe>
+            ${PROJECT_SOURCE_DIR}/config/init.lua)
+        set_tests_properties(shell_integration PROPERTIES TIMEOUT 30)
+    endif()
 endif()
