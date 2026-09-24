@@ -4,6 +4,8 @@ shaoDe is being developed for a personal Gentoo desktop. It currently has a
 working nested compositor and an experimental standalone backend. The actual
 Gentoo build and physical DRM/input session have not yet been tested; development
 verification is on Arch. There is no dependency on systemd in shaoDe itself.
+For a reproducible Gentoo test machine, see the QEMU/KVM VM scripts in
+[tools/gentoo-vm](../tools/gentoo-vm/README.md).
 
 ## Dependencies
 
@@ -25,7 +27,9 @@ between release series. Relevant Gentoo packages are:
 Standalone operation requires wlroots built with `drm`, `libinput`, and `session`
 USE flags. X11 applications additionally need wlroots with the `X` USE flag and
 `x11-base/xwayland`; shaoDe then links `x11-libs/libxcb` and enables XWayland
-automatically. A GLES2-capable graphics stack is needed. The upstream Gentoo ebuild
+automatically. To fix wlroots' lost X11 windows at the source, copy
+`packaging/patches/wlroots-xwm-drain.patch` into `/etc/portage/patches/gui-libs/wlroots/`,
+re-emerge wlroots, and configure shaoDe with `-DSHAODE_XWM_WAKER=OFF`. A GLES2-capable graphics stack is needed. The upstream Gentoo ebuild
 lists the backend dependencies and flags:
 [wlroots 0.20.2 ebuild](https://github.com/gentoo/gentoo/blob/master/gui-libs/wlroots/wlroots-0.20.2.ebuild).
 Check the package version/keywords available in your own tree before installing.

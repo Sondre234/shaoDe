@@ -99,10 +99,16 @@ inhibition (`ext-idle-notify-v1`, `idle-inhibit-unstable-v1`) let swayidle lock
 or blank after inactivity while video players keep the session awake.
 
 X11 applications run through XWayland when wlroots is built with X support and
-`Xwayland` is installed. It starts with the compositor (Lua `xwayland = false`
-disables it; changing it needs a restart), and the shell and startup commands
-launch once it is ready, so they inherit `DISPLAY`. X11 windows take part in
-focus, the taskbar, snapping, maximize, and fullscreen like Wayland windows.
+`Xwayland` is installed. `DISPLAY` is set from the start, but Xwayland only
+starts when the first X11 client connects and exits again once idle (Lua
+`xwayland = false` disables it; changing it needs a restart). X11 windows take
+part in focus, the taskbar, snapping, maximize, and fullscreen like Wayland windows.
+
+wlroots' X11 window manager can leave events unprocessed, which loses the
+first window after Xwayland starts. Until wlroots fixes this, shaoDe nudges the
+window manager every 250 ms while Xwayland runs. With wlroots patched by
+`packaging/patches/wlroots-xwm-drain.patch`, configure with
+`-DSHAODE_XWM_WAKER=OFF` to drop the workaround.
 Lua currently configures the exposed settings/actions; custom layout functions
 and shell widgets are later work.
 

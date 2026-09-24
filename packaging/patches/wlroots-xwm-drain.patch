@@ -1,0 +1,44 @@
+From 380333d9fdc2b977ce459bb2c78116ec3e8292d0 Mon Sep 17 00:00:00 2001
+From: Sondre234 <sondrefmyrmel@gmail.com>
+Date: Thu, 24 Sep 2026 08:54:43 +0200
+Subject: [PATCH] xwayland/xwm: drain queued events on the post-dispatch check
+
+x11_event_handler() is registered with wl_event_source_check() so it runs
+again after each dispatch, but that call passes mask == 0 and the handler
+only reads events on WL_EVENT_READABLE. Events that xcb read into its
+queue during a flush or round-trip outside the handler (xwm_create(),
+xwm_schedule_flush(), ...) then sit there until more data arrives on the
+socket. With a lazily started Xwayland this reliably loses the first
+client's MapRequest, so its window never appears.
+
+read_x11_events() only polls, so call it unconditionally.
+---
+ xwayland/xwm.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/xwayland/xwm.c b/xwayland/xwm.c
+index f31163d..5fbade5 100644
+--- a/xwayland/xwm.c
++++ b/xwayland/xwm.c
+@@ -2087,12 +2087,12 @@ static int x11_event_handler(int fd, uint32_t mask, void *data) {
+ 		return 0;
+ 	}
+ 
+-	int count = 0;
+-	if (mask & WL_EVENT_READABLE) {
+-		count = read_x11_events(xwm);
+-		if (count) {
+-			xwm_schedule_flush(xwm);
+-		}
++	// Also read on the post-dispatch check (mask == 0): xcb may have queued
++	// events while reading during a flush or a round-trip outside this
++	// handler, and the socket won't become readable again for those.
++	int count = read_x11_events(xwm);
++	if (count) {
++		xwm_schedule_flush(xwm);
+ 	}
+ 
+ 	if (mask & WL_EVENT_WRITABLE) {
+-- 
+2.55.0
+

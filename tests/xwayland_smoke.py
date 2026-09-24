@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-xwayland-test-") as directory:
                                   env=env, stdout=output, stderr=output)
         try:
             wait_for(lambda: "Running Wayland compositor" in log.read_text(), [server], "startup")
-            assert "XWayland ready" not in log.read_text(), log.read_text()
+            assert "XWayland listening" not in log.read_text(), log.read_text()
         finally:
             server.terminate()
             server.wait(timeout=5)
@@ -48,11 +48,12 @@ with tempfile.TemporaryDirectory(prefix="shaode-xwayland-test-") as directory:
                                   env=env, stdout=output, stderr=output)
         processes = [server]
         try:
-            wait_for(lambda: "XWayland ready" in log.read_text(), processes, "XWayland startup")
+            wait_for(lambda: "Running Wayland compositor" in log.read_text(), processes, "startup")
             text = log.read_text()
             env["WAYLAND_DISPLAY"] = re.search(r"WAYLAND_DISPLAY=(\S+)", text)[1]
-            env["DISPLAY"] = re.search(r"XWayland ready on DISPLAY=(\S+)", text)[1]
-
+            env["DISPLAY"] = re.search(r"XWayland listening on DISPLAY=(\S+)", text)[1]
+            # Xwayland starts on demand; the first client's window must still map.
+            assert "XWayland ready" not in text, text
             subprocess.run([x11_probe], env=env, check=True, timeout=30)
             # A second client reuses the running Xwayland; close it from the taskbar.
             client = subprocess.Popen([x11_probe, "wait-close"], env=env,

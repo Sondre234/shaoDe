@@ -46,6 +46,9 @@
 #include <wlr/xcursor.h>
 #if WLR_HAS_XWAYLAND
 #include <wlr/xwayland.h>
+#if SHAODE_XWM_WAKER
+#include <xcb/xfixes.h>
+#endif
 #endif
 #include <xkbcommon/xkbcommon.h>
 
@@ -78,13 +81,13 @@ struct sh_server {
 #if WLR_HAS_XWAYLAND
     struct wlr_xwayland *xwayland;
     struct wl_listener xwayland_ready, new_xwayland_surface;
-    struct wl_event_source *startup_timeout;
+#if SHAODE_XWM_WAKER
     xcb_connection_t *xwm_waker;
     xcb_atom_t waker_atom;
     xcb_window_t xwm_window;
     struct wl_event_source *waker_timer, *waker_input;
 #endif
-    bool started;
+#endif
     int workspace; // current workspace, from 0
 
     int control_fd;
@@ -1964,11 +1967,12 @@ static void server_new_xwayland_surface(struct wl_listener *listener, void *data
     }
 }
 
-static void run_startup(struct sh_server *server);
-
-/* wlroots' XWM can strand X events: xcb_flush() in its write-only wakeup reads
- * pending input into xcb's queue, and nothing processes that queue until more
- * data arrives. A periodic client message from a separate connection, sent only
+#if SHAODE_XWM_WAKER
+/* wlroots' XWM can strand X events: xcb reads them into its queue during flushes
+ * and round-trips outside the event handler, and the handler's post-dispatch
+ * check ignores that queue (packaging/patches/wlroots-xwm-drain.patch fixes it).
+ * That strands the first MapRequest after Xwayland starts, among others. While
+ * Xwayland runs, a periodic client message from a separate connection, sent only
  * to the XWM's own window, makes its socket readable so the handler drains the queue. */
 enum { XWM_WAKE_INTERVAL_MS = 250 };
 
@@ -2027,6 +2031,13 @@ static void open_xwm_waker(struct sh_server *server) {
         free(reply);
     }
     server->waker_atom = atoms[0];
+    // Like the XWM's connection, this one must not keep an idle Xwayland running.
+    xcb_xfixes_query_version_reply_t *xfixes = xcb_xfixes_query_version_reply(
+        server->xwm_waker, xcb_xfixes_query_version(server->xwm_waker, 6, 0), NULL);
+    if (xfixes && xfixes->major_version >= 6)
+        xcb_xfixes_set_client_disconnect_mode(server->xwm_waker,
+                                              XCB_XFIXES_CLIENT_DISCONNECT_FLAGS_TERMINATE);
+    free(xfixes);
     server->xwm_window = XCB_WINDOW_NONE;
     xcb_screen_t *screen = xcb_setup_roots_iterator(xcb_get_setup(server->xwm_waker)).data;
     xcb_get_property_reply_t *check = xcb_get_property_reply(
@@ -2046,14 +2057,17 @@ static void open_xwm_waker(struct sh_server *server) {
         close_xwm_waker(server);
         return;
     }
-    wl_event_source_timer_update(server->waker_timer, XWM_WAKE_INTERVAL_MS);
+    xwm_waker_tick(server); // drain whatever the XWM stranded while attaching
 }
+#endif
 
 static void xwayland_ready(struct wl_listener *listener, void *data) {
     struct sh_server *server = wl_container_of(listener, server, xwayland_ready);
     wlr_log(WLR_INFO, "XWayland ready on DISPLAY=%s", server->xwayland->display_name);
     wlr_xwayland_set_seat(server->xwayland, server->seat);
+#if SHAODE_XWM_WAKER
     open_xwm_waker(server);
+#endif
     if (wlr_xcursor_manager_load(server->cursor_mgr, 1)) {
         struct wlr_xcursor *xcursor =
             wlr_xcursor_manager_get_xcursor(server->cursor_mgr, "default", 1);
@@ -2063,30 +2077,8 @@ static void xwayland_ready(struct wl_listener *listener, void *data) {
                                     image->hotspot_x, image->hotspot_y);
         }
     }
-    run_startup(server);
-}
-
-static int startup_timeout(void *data) {
-    wlr_log(WLR_ERROR, "XWayland did not become ready; starting applications anyway");
-    run_startup(data);
-    return 0;
 }
 #endif
-
-/* Launch the shell and startup commands once X11 clients can be managed: the
- * window manager ignores windows created before it attaches to Xwayland. */
-static void run_startup(struct sh_server *server) {
-    if (server->started)
-        return;
-    server->started = true;
-#if WLR_HAS_XWAYLAND
-    if (server->startup_timeout) {
-        wl_event_source_remove(server->startup_timeout);
-        server->startup_timeout = NULL;
-    }
-#endif
-    server->callbacks->startup(server->callbacks->userdata);
-}
 
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
     struct sh_popup *popup = wl_container_of(listener, popup, commit);
@@ -2451,19 +2443,16 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     setenv("XDG_SESSION_TYPE", "wayland", true);
     unsetenv("DISPLAY");
 #if WLR_HAS_XWAYLAND
-    // Started eagerly: lazy startup races the first client against the window manager.
+    // Xwayland starts when the first X11 client connects and exits once idle.
     if (callbacks->settings(callbacks->userdata)->xwayland) {
-        server.xwayland = wlr_xwayland_create(server.wl_display, compositor, false);
+        server.xwayland = wlr_xwayland_create(server.wl_display, compositor, true);
         if (server.xwayland) {
             server.xwayland_ready.notify = xwayland_ready;
             wl_signal_add(&server.xwayland->events.ready, &server.xwayland_ready);
             server.new_xwayland_surface.notify = server_new_xwayland_surface;
             wl_signal_add(&server.xwayland->events.new_surface, &server.new_xwayland_surface);
             setenv("DISPLAY", server.xwayland->display_name, true);
-            wlr_log(WLR_INFO, "Starting XWayland on DISPLAY=%s", server.xwayland->display_name);
-            server.startup_timeout = wl_event_loop_add_timer(loop, startup_timeout, &server);
-            if (server.startup_timeout)
-                wl_event_source_timer_update(server.startup_timeout, 10000);
+            wlr_log(WLR_INFO, "XWayland listening on DISPLAY=%s", server.xwayland->display_name);
         } else {
             wlr_log(WLR_ERROR, "Cannot create XWayland; X11 applications are unavailable");
         }
@@ -2472,10 +2461,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     (void)compositor;
 #endif
     server.running = true;
-#if WLR_HAS_XWAYLAND
-    if (!server.xwayland)
-#endif
-        run_startup(&server);
+    callbacks->startup(callbacks->userdata);
 
     wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s", socket);
     wl_display_run(server.wl_display);
@@ -2486,9 +2472,9 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_event_source_remove(sigchld);
 
 #if WLR_HAS_XWAYLAND
-    if (server.startup_timeout)
-        wl_event_source_remove(server.startup_timeout);
+#if SHAODE_XWM_WAKER
     close_xwm_waker(&server);
+#endif
     if (server.xwayland) {
         wl_list_remove(&server.xwayland_ready.link);
         wl_list_remove(&server.new_xwayland_surface.link);
