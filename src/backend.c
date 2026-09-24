@@ -27,23 +27,43 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
+#include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_ext_data_control_v1.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
+#include <wlr/types/wlr_fractional_scale_v1.h>
+#include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_presentation_time.h>
+#include <wlr/types/wlr_primary_selection.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_session_lock_v1.h>
+#include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_viewporter.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_xdg_dialog_v1.h>
+#include <wlr/types/wlr_xdg_foreign_registry.h>
+#include <wlr/types/wlr_xdg_foreign_v1.h>
+#include <wlr/types/wlr_xdg_foreign_v2.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
+#include <wlr/util/region.h>
 #include <wlr/xcursor.h>
 #if WLR_HAS_XWAYLAND
 #include <wlr/xwayland.h>
@@ -152,7 +172,15 @@ struct sh_server {
     uint32_t shape_edges; // edges of the client's single-edge resize shape, else 0
     uint32_t shown_edges; // edges of the resize cursor currently shown for it
     struct wl_listener pointer_focus_change;
-    struct wl_listener request_set_selection;
+    struct wl_listener request_set_selection, request_set_primary_selection;
+    struct wl_listener request_start_drag, start_drag;
+    struct wlr_scene_tree *drag_icons; // follows the cursor during drag-and-drop
+    struct wlr_xdg_activation_v1 *activation;
+    struct wl_listener request_activate;
+    struct wlr_relative_pointer_manager_v1 *relative_pointer;
+    struct wlr_pointer_constraints_v1 *constraints;
+    struct wlr_pointer_constraint_v1 *active_constraint; // on the keyboard-focused surface
+    struct wl_listener new_constraint, keyboard_focus_change;
     struct wl_list keyboards;
     enum sh_cursor_mode cursor_mode;
     struct sh_toplevel *grabbed_toplevel;
@@ -241,6 +269,7 @@ struct sh_inhibitor {
 };
 
 struct sh_popup {
+    struct sh_server *server;
     struct wlr_xdg_popup *xdg_popup;
     struct wl_listener commit;
     struct wl_listener destroy;
@@ -374,7 +403,8 @@ static bool toplevel_accepts_keyboard(struct sh_toplevel *toplevel) {
     return true;
 }
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
-static void create_popup(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent);
+static void create_popup(struct sh_server *server, struct wlr_xdg_popup *popup,
+                         struct wlr_scene_tree *parent);
 static void notify_subscribers(struct sh_server *server);
 static bool wants_tiling(struct sh_toplevel *toplevel);
 static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
@@ -795,6 +825,97 @@ static void seat_request_set_selection(struct wl_listener *listener, void *data)
     wlr_seat_set_selection(server->seat, event->source, event->serial);
 }
 
+static void seat_request_set_primary_selection(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, request_set_primary_selection);
+    struct wlr_seat_request_set_primary_selection_event *event = data;
+    wlr_seat_set_primary_selection(server->seat, event->source, event->serial);
+}
+
+/* Drag-and-drop (browser tabs, files into chat windows): only from a real button press. */
+static void seat_request_start_drag(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, request_start_drag);
+    struct wlr_seat_request_start_drag_event *event = data;
+    if (!server->locked && server->cursor_mode == SH_CURSOR_PASSTHROUGH &&
+        wlr_seat_validate_pointer_grab_serial(server->seat, event->origin, event->serial))
+        wlr_seat_start_pointer_drag(server->seat, event->drag, event->serial);
+    else
+        wlr_data_source_destroy(event->drag->source);
+}
+
+static void seat_start_drag(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, start_drag);
+    struct wlr_drag *drag = data;
+    wlr_scene_node_set_position(&server->drag_icons->node, server->cursor->x, server->cursor->y);
+    // The scene helper removes the icon's node when the icon goes away.
+    if (drag->icon)
+        wlr_scene_drag_icon_create(server->drag_icons, drag->icon);
+}
+
+static struct sh_toplevel *toplevel_for_surface(struct sh_server *server,
+                                                struct wlr_surface *surface) {
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel_surface(toplevel) == surface)
+            return toplevel;
+    }
+    return NULL;
+}
+
+/* xdg-activation: an application asks to be raised, e.g. a browser opening a link from chat.
+ * wlroots expires and validates tokens. Tokens made without an input serial are honoured too:
+ * a browser handed a link by another process often has nothing better. */
+static void request_activate(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, request_activate);
+    struct wlr_xdg_activation_v1_request_activate_event *event = data;
+    struct sh_toplevel *toplevel = toplevel_for_surface(server, event->surface);
+    if (toplevel && toplevel_mapped(toplevel))
+        focus_toplevel(toplevel);
+}
+
+/* Pointer constraints (games, remote desktops, pointer lock in browsers) apply to the
+ * keyboard-focused surface only, and only while the pointer is over it. */
+static void set_active_constraint(struct sh_server *server,
+                                  struct wlr_pointer_constraint_v1 *constraint) {
+    if (server->active_constraint == constraint)
+        return;
+    if (server->active_constraint)
+        wlr_pointer_constraint_v1_send_deactivated(server->active_constraint);
+    server->active_constraint = constraint;
+    if (constraint)
+        wlr_pointer_constraint_v1_send_activated(constraint);
+}
+
+static void constraint_destroy(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_constraint_v1 *constraint = data;
+    struct sh_server *server = constraint->data;
+    wl_list_remove(&listener->link);
+    free(listener);
+    if (server->active_constraint == constraint)
+        server->active_constraint = NULL;
+}
+
+static void server_new_constraint(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_constraint);
+    struct wlr_pointer_constraint_v1 *constraint = data;
+    struct wl_listener *destroy = calloc(1, sizeof(*destroy));
+    if (!destroy)
+        return;
+    constraint->data = server;
+    destroy->notify = constraint_destroy;
+    wl_signal_add(&constraint->events.destroy, destroy);
+    if (constraint->surface == server->seat->keyboard_state.focused_surface)
+        set_active_constraint(server, constraint);
+}
+
+static void seat_keyboard_focus_change(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, keyboard_focus_change);
+    struct wlr_seat_keyboard_focus_change_event *event = data;
+    set_active_constraint(server, event->new_surface ? wlr_pointer_constraints_v1_constraint_for_surface(
+                                                           server->constraints, event->new_surface,
+                                                           server->seat)
+                                                     : NULL);
+}
+
 static struct sh_node *desktop_node_at(struct sh_server *server, double lx, double ly,
                                        struct wlr_surface **surface, double *sx, double *sy) {
     struct wlr_scene_node *node = wlr_scene_node_at(&server->scene->tree.node, lx, ly, sx, sy);
@@ -961,6 +1082,9 @@ static void process_cursor_resize(struct sh_server *server) {
 }
 
 static void process_cursor_motion(struct sh_server *server, uint32_t time) {
+    if (server->seat->drag)
+        wlr_scene_node_set_position(&server->drag_icons->node, server->cursor->x,
+                                    server->cursor->y);
     if (server->cursor_mode == SH_CURSOR_MOVE) {
         process_cursor_move(server);
         return;
@@ -991,7 +1115,24 @@ static void server_cursor_motion(struct wl_listener *listener, void *data) {
     struct sh_server *server = wl_container_of(listener, server, cursor_motion);
     struct wlr_pointer_motion_event *event = data;
     wlr_idle_notifier_v1_notify_activity(server->idle_notifier, server->seat);
-    wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+    wlr_relative_pointer_manager_v1_send_relative_motion(
+        server->relative_pointer, server->seat, (uint64_t)event->time_msec * 1000, event->delta_x,
+        event->delta_y, event->unaccel_dx, event->unaccel_dy);
+    double dx = event->delta_x, dy = event->delta_y;
+    struct wlr_pointer_constraint_v1 *constraint = server->active_constraint;
+    if (constraint && server->cursor_mode == SH_CURSOR_PASSTHROUGH &&
+        server->seat->pointer_state.focused_surface == constraint->surface) {
+        if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
+            return; // The client only wants the relative motion sent above.
+        double sx = server->seat->pointer_state.sx, sy = server->seat->pointer_state.sy;
+        double confined_x, confined_y;
+        if (wlr_region_confine(&constraint->region, sx, sy, sx + dx, sy + dy, &confined_x,
+                               &confined_y)) {
+            dx = confined_x - sx;
+            dy = confined_y - sy;
+        }
+    }
+    wlr_cursor_move(server->cursor, &event->pointer->base, dx, dy);
     process_cursor_motion(server, event->time_msec);
 }
 
@@ -1809,7 +1950,7 @@ static void layer_destroy(struct wl_listener *listener, void *data) {
 }
 static void layer_new_popup(struct wl_listener *listener, void *data) {
     struct sh_layer *layer = wl_container_of(listener, layer, new_popup);
-    create_popup(data, layer->scene->tree);
+    create_popup(layer->server, data, layer->scene->tree);
 }
 static void server_new_layer_surface(struct wl_listener *listener, void *data) {
     struct sh_server *server = wl_container_of(listener, server, new_layer_surface);
@@ -2481,6 +2622,28 @@ static void xdg_popup_commit(struct wl_listener *listener, void *data) {
     struct sh_popup *popup = wl_container_of(listener, popup, commit);
 
     if (popup->xdg_popup->base->initial_commit) {
+        // Keep menus on the output of their window or panel; positioners say how to flip or slide.
+        struct wlr_scene_tree *root = popup->xdg_popup->base->data;
+        while (root && !root->node.data)
+            root = root->node.parent;
+        struct sh_server *server = popup->server;
+        int root_x = 0, root_y = 0;
+        if (root)
+            wlr_scene_node_coords(&root->node, &root_x, &root_y);
+        else
+            root_x = server->cursor->x, root_y = server->cursor->y;
+        struct wlr_output *output =
+            wlr_output_layout_output_at(server->output_layout, root_x, root_y);
+        if (!output)
+            output = wlr_output_layout_output_at(server->output_layout, server->cursor->x,
+                                                 server->cursor->y);
+        if (root && output) {
+            struct wlr_box box;
+            wlr_output_layout_get_box(server->output_layout, output, &box);
+            box.x -= root_x;
+            box.y -= root_y;
+            wlr_xdg_popup_unconstrain_from_box(popup->xdg_popup, &box);
+        }
         wlr_xdg_surface_schedule_configure(popup->xdg_popup->base);
     }
 }
@@ -2494,8 +2657,10 @@ static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
     free(popup);
 }
 
-static void create_popup(struct wlr_xdg_popup *xdg_popup, struct wlr_scene_tree *parent_tree) {
+static void create_popup(struct sh_server *server, struct wlr_xdg_popup *xdg_popup,
+                         struct wlr_scene_tree *parent_tree) {
     struct sh_popup *popup = calloc(1, sizeof(*popup));
+    popup->server = server;
     popup->xdg_popup = xdg_popup;
     xdg_popup->base->data = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
     popup->commit.notify = xdg_popup_commit;
@@ -2506,13 +2671,14 @@ static void create_popup(struct wlr_xdg_popup *xdg_popup, struct wlr_scene_tree 
 }
 
 static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_xdg_popup);
     struct wlr_xdg_popup *popup = data;
     // A layer-shell popup is attached by the layer's new_popup handler instead.
     if (!popup->parent)
         return;
     struct wlr_xdg_surface *parent = wlr_xdg_surface_try_from_wlr_surface(popup->parent);
     if (parent && parent->data)
-        create_popup(popup, parent->data);
+        create_popup(server, popup, parent->data);
 }
 
 /* Control socket: one newline-terminated request per connection, answered with
@@ -2794,7 +2960,16 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
         return 1;
     }
 
-    wlr_renderer_init_wl_display(server.renderer, server.wl_display);
+    wlr_renderer_init_wl_shm(server.renderer, server.wl_display);
+    // GPU clients (browsers, Electron, games) share buffers by dmabuf; the scene sends them
+    // scanout feedback, and explicit sync keeps NVIDIA from showing unfinished frames.
+    struct wlr_linux_dmabuf_v1 *linux_dmabuf = NULL;
+    if (wlr_renderer_get_texture_formats(server.renderer, WLR_BUFFER_CAP_DMABUF))
+        linux_dmabuf =
+            wlr_linux_dmabuf_v1_create_with_renderer(server.wl_display, 4, server.renderer);
+    int drm_fd = wlr_renderer_get_drm_fd(server.renderer);
+    if (drm_fd >= 0 && server.renderer->features.timeline && server.backend->features.timeline)
+        wlr_linux_drm_syncobj_manager_v1_create(server.wl_display, 1, drm_fd);
 
     server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
     if (server.allocator == NULL) {
@@ -2806,14 +2981,32 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
         wlr_compositor_create(server.wl_display, 5, server.renderer);
     wlr_subcompositor_create(server.wl_display);
     wlr_data_device_manager_create(server.wl_display);
+    wlr_primary_selection_v1_device_manager_create(server.wl_display);
+    wlr_data_control_manager_v1_create(server.wl_display);
+    wlr_ext_data_control_manager_v1_create(server.wl_display, 1);
+    wlr_viewporter_create(server.wl_display);
+    wlr_fractional_scale_manager_v1_create(server.wl_display, 1);
+    wlr_single_pixel_buffer_manager_v1_create(server.wl_display);
+    wlr_presentation_create(server.wl_display, server.backend, 2);
+    wlr_xdg_wm_dialog_v1_create(server.wl_display, 1);
+    // Portals parent their file choosers and share dialogs to the requesting window.
+    struct wlr_xdg_foreign_registry *foreign_registry =
+        wlr_xdg_foreign_registry_create(server.wl_display);
+    wlr_xdg_foreign_v1_create(server.wl_display, foreign_registry);
+    wlr_xdg_foreign_v2_create(server.wl_display, foreign_registry);
 
     server.output_layout = wlr_output_layout_create(server.wl_display);
+    wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
 
     wl_list_init(&server.outputs);
     server.new_output.notify = server_new_output;
     wl_signal_add(&server.backend->events.new_output, &server.new_output);
 
     server.scene = wlr_scene_create();
+    if (linux_dmabuf)
+        wlr_scene_set_linux_dmabuf_v1(server.scene, linux_dmabuf);
+    wlr_scene_set_gamma_control_manager_v1(server.scene,
+                                           wlr_gamma_control_manager_v1_create(server.wl_display));
     server.backgrounds = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[0] = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[1] = wlr_scene_tree_create(&server.scene->tree);
@@ -2822,6 +3015,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     server.fullscreen = wlr_scene_tree_create(&server.scene->tree);
     server.unmanaged = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[3] = wlr_scene_tree_create(&server.scene->tree);
+    server.drag_icons = wlr_scene_tree_create(&server.scene->tree);
     server.lock_tree = wlr_scene_tree_create(&server.scene->tree);
     server.lock_blanks = wlr_scene_tree_create(server.lock_tree);
     wlr_scene_node_set_enabled(&server.lock_tree->node, false);
@@ -2872,6 +3066,23 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_signal_add(&server.seat->pointer_state.events.focus_change, &server.pointer_focus_change);
     server.request_set_selection.notify = seat_request_set_selection;
     wl_signal_add(&server.seat->events.request_set_selection, &server.request_set_selection);
+    server.request_set_primary_selection.notify = seat_request_set_primary_selection;
+    wl_signal_add(&server.seat->events.request_set_primary_selection,
+                  &server.request_set_primary_selection);
+    server.request_start_drag.notify = seat_request_start_drag;
+    wl_signal_add(&server.seat->events.request_start_drag, &server.request_start_drag);
+    server.start_drag.notify = seat_start_drag;
+    wl_signal_add(&server.seat->events.start_drag, &server.start_drag);
+    server.keyboard_focus_change.notify = seat_keyboard_focus_change;
+    wl_signal_add(&server.seat->keyboard_state.events.focus_change,
+                  &server.keyboard_focus_change);
+    server.activation = wlr_xdg_activation_v1_create(server.wl_display);
+    server.request_activate.notify = request_activate;
+    wl_signal_add(&server.activation->events.request_activate, &server.request_activate);
+    server.relative_pointer = wlr_relative_pointer_manager_v1_create(server.wl_display);
+    server.constraints = wlr_pointer_constraints_v1_create(server.wl_display);
+    server.new_constraint.notify = server_new_constraint;
+    wl_signal_add(&server.constraints->events.new_constraint, &server.new_constraint);
     server.idle_notifier = wlr_idle_notifier_v1_create(server.wl_display);
     server.idle_inhibit = wlr_idle_inhibit_v1_create(server.wl_display);
     server.new_inhibitor.notify = server_new_inhibitor;
@@ -2951,6 +3162,12 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_list_remove(&server.request_set_shape.link);
     wl_list_remove(&server.pointer_focus_change.link);
     wl_list_remove(&server.request_set_selection.link);
+    wl_list_remove(&server.request_set_primary_selection.link);
+    wl_list_remove(&server.request_start_drag.link);
+    wl_list_remove(&server.start_drag.link);
+    wl_list_remove(&server.keyboard_focus_change.link);
+    wl_list_remove(&server.request_activate.link);
+    wl_list_remove(&server.new_constraint.link);
 
     wl_list_remove(&server.new_output.link);
     wl_list_remove(&server.new_lock.link);

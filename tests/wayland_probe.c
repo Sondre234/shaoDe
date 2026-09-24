@@ -19,6 +19,7 @@ struct buffer {
     struct buffer *next;
 };
 struct probe {
+    bool list_globals;
     struct wl_compositor *compositor;
     struct zwlr_layer_shell_v1 *layer_shell;
     struct zwlr_layer_surface_v1 *panel;
@@ -128,6 +129,8 @@ static const struct wl_output_listener output_listener = {
 static void global(void *data, struct wl_registry *registry, uint32_t name, const char *interface,
                    uint32_t version) {
     struct probe *probe = data;
+    if (probe->list_globals)
+        puts(interface);
     if (!strcmp(interface, "wl_compositor"))
         probe->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 4);
     else if (!strcmp(interface, "wl_shm"))
@@ -280,6 +283,8 @@ int main(int argc, char **argv) {
     struct probe probe = {.width = 320, .height = 240, .panel_height = 48};
     if (argc == 2 && !strcmp(argv[1], "--external-control"))
         probe.external_control = true;
+    else if (argc == 2 && !strcmp(argv[1], "--globals"))
+        probe.list_globals = true;
     else if (argc == 3 && !strcmp(argv[1], "--external-panel")) {
         char *end;
         long height = strtol(argv[2], &end, 10);
@@ -291,7 +296,7 @@ int main(int argc, char **argv) {
         probe.close_app_id = argv[2];
         probe.activate = !strcmp(argv[1], "--activate");
     } else if (argc != 1)
-        die("usage: wayland_probe [--external-control | --external-panel HEIGHT | "
+        die("usage: wayland_probe [--globals | --external-control | --external-panel HEIGHT | "
             "--close APP_ID | --activate APP_ID]");
     struct wl_display *display = wl_display_connect(NULL);
     if (!display)
@@ -300,6 +305,8 @@ int main(int argc, char **argv) {
     wl_registry_add_listener(registry, &registry_listener, &probe);
     if (wl_display_roundtrip(display) < 0)
         die("registry roundtrip failed");
+    if (probe.list_globals)
+        return 0;
     if (!probe.compositor || !probe.shm || !probe.shell)
         die("required globals missing");
     if (!probe.layer_shell || !probe.manager || !probe.seat || !probe.output)

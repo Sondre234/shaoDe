@@ -46,6 +46,17 @@ with tempfile.TemporaryDirectory(prefix="shaode-test-") as directory:
             wait_for(lambda: "Running Wayland compositor" in log.read_text(), process, "startup")
             socket = re.search(r"WAYLAND_DISPLAY=(\S+)", log.read_text()).group(1)
             env["WAYLAND_DISPLAY"] = socket
+            # Browsers and Electron apps expect these beyond the core desktop protocols.
+            advertised = set(subprocess.run([probe, "--globals"], env=env, check=True,
+                                            capture_output=True, text=True, timeout=10).stdout.split())
+            expected = {"wp_viewporter", "wp_fractional_scale_manager_v1", "zxdg_output_manager_v1",
+                        "wp_presentation", "zwp_primary_selection_device_manager_v1",
+                        "zwlr_data_control_manager_v1", "ext_data_control_manager_v1",
+                        "xdg_activation_v1", "zwp_relative_pointer_manager_v1",
+                        "zwp_pointer_constraints_v1", "wp_single_pixel_buffer_manager_v1",
+                        "zxdg_exporter_v2", "zxdg_importer_v2", "xdg_wm_dialog_v1",
+                        "zwlr_gamma_control_manager_v1"}
+            assert expected <= advertised, f"missing globals: {sorted(expected - advertised)}"
             for _ in range(3):
                 subprocess.run([probe], env=env, check=True, timeout=10)
             if task_model_test:

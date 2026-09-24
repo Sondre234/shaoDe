@@ -132,6 +132,15 @@ session stays locked until a new locker takes over. Idle notification and idle
 inhibition (`ext-idle-notify-v1`, `idle-inhibit-unstable-v1`) let swayidle lock
 or blank after inactivity while video players keep the session awake.
 
+Browsers and Electron applications (Firefox, Chromium, Discord) get the protocols they
+look for: GPU buffers through linux-dmabuf with explicit sync where the driver supports it,
+viewporter, fractional scaling, presentation timing, xdg-output, middle-click paste
+(primary selection), clipboard managers (`wl-clipboard`, data-control), drag-and-drop,
+pointer lock and relative motion for games, and xdg-foreign for portal dialogs.
+xdg-activation lets an application raise itself, so a link clicked in a chat brings the
+browser forward; shaoDe honours every valid token and does not prevent focus stealing.
+Popup menus are kept on the output of their window.
+
 X11 applications run through XWayland when wlroots is built with X support and
 `Xwayland` is installed. `DISPLAY` is set from the start, but Xwayland only
 starts when the first X11 client connects and exits again once idle (Lua
