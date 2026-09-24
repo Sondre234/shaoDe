@@ -1143,7 +1143,13 @@ static void output_destroy(struct wl_listener *listener, void *data) {
     wlr_scene_node_destroy(&output->background->node);
     wlr_scene_node_destroy(&output->lock_blank->node);
     struct sh_server *server = output->server;
-    if (server->running && wl_list_empty(&server->outputs))
+    // Closing the host window ends a nested session. A standalone session loses every output
+    // on VT switch (wlroots recreates them on return) or when the last monitor is unplugged.
+    bool standalone = false;
+#if WLR_HAS_SESSION
+    standalone = server->session != NULL;
+#endif
+    if (server->running && !standalone && wl_list_empty(&server->outputs))
         wl_display_terminate(server->wl_display);
     free(output);
     send_locked_if_presented(server);

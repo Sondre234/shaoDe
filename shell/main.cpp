@@ -27,6 +27,9 @@ void onSignal(int number) {
 } // namespace
 int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);
+    // Views come and go with outputs (all of them during a VT switch); the shell's lifetime
+    // follows the compositor connection instead.
+    QGuiApplication::setQuitOnLastWindowClosed(false);
     QCoreApplication::setApplicationName("shaode-shell");
     QGuiApplication::setDesktopFileName("shaode-shell");
     QCommandLineParser parser;
@@ -66,6 +69,9 @@ int main(int argc, char **argv) {
         qmlRegisterUncreatableType<TaskModel>("ShaoDe", 1, 0, "TaskModel", "Provided by the shell");
         std::vector<std::unique_ptr<ShellView>> views;
         auto addScreen = [&](QScreen *screen) {
+            // Qt's stand-in while the compositor has no outputs has no wl_output to attach to.
+            if (!preview && screen->name().isEmpty())
+                return;
             for (bool desktop : {true, false}) {
                 if (preview && desktop != parser.isSet("preview-desktop"))
                     continue;
