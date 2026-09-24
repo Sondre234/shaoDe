@@ -1,10 +1,12 @@
 /* Derived from wlroots TinyWL 0.20.2; see vendor/tinywl/LICENSE. */
 #define _GNU_SOURCE // accept4
 #include "shaode/backend.h"
+#include "shaode/decoration.h"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -192,6 +194,11 @@ struct sh_server {
     enum sh_cursor_mode cursor_mode;
     struct sh_toplevel *grabbed_toplevel;
     double grab_x, grab_y;
+    /* Window-control pills: shared buffers (plain, hovered), the window whose pill is
+     * hovered or revealed over fullscreen, and a dot pressed but not yet released. */
+    struct wlr_buffer *deco_buffers[2];
+    struct sh_toplevel *deco_hovered, *deco_revealed, *deco_pressed;
+    enum sh_deco_part deco_pressed_part;
     struct wlr_box grab_geobox;
     uint32_t resize_edges;
 
@@ -240,8 +247,10 @@ struct sh_toplevel {
     struct wlr_xwayland_surface *xsurface; // NULL for xdg-shell windows
     bool unmanaged, associated;            // unmanaged: override-redirect menus and tooltips
     struct wl_listener x_associate, x_dissociate, x_configure, x_activate, x_geometry;
+    struct wl_listener x_decorations;
 #endif
     struct wlr_scene_tree *scene_tree;
+    struct wlr_scene_buffer *deco; // window controls; NULL when the client decorates itself
     struct wl_listener map;
     struct wl_listener unmap;
     struct wl_listener commit;
@@ -1093,6 +1102,124 @@ static void process_cursor_resize(struct sh_server *server) {
                        new_bottom - new_top);
 }
 
+static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen);
+
+static bool wants_decoration(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    // X11 windows that leave decorations to the window manager (Spotify, for one).
+    return toplevel->xsurface && !toplevel->unmanaged &&
+           toplevel->xsurface->decorations == WLR_XWAYLAND_SURFACE_DECORATIONS_ALL;
+#else
+    return false;
+#endif
+}
+
+static struct wlr_buffer *deco_buffer(struct sh_server *server, bool hovered) {
+    if (!server->deco_buffers[hovered]) {
+        float scale = 1;
+        struct sh_output *output;
+        wl_list_for_each(output, &server->outputs, link) {
+            if (output->wlr_output->scale > scale)
+                scale = output->wlr_output->scale;
+        }
+        server->deco_buffers[hovered] = sh_decoration_render((int)ceilf(scale), hovered);
+    }
+    return server->deco_buffers[hovered];
+}
+
+/* Over a fullscreen window the pill hides until the pointer nears its corner. */
+static bool in_deco_corner(struct sh_toplevel *toplevel, double x, double y) {
+    double left = toplevel->scene_tree->node.x, top = toplevel->scene_tree->node.y;
+    return x >= left && y >= top && x < left + 2 * SH_DECO_MARGIN + SH_DECO_WIDTH &&
+           y < top + 2 * SH_DECO_MARGIN + SH_DECO_HEIGHT;
+}
+
+/* Adds, removes, or updates a window's pill to match what it asks for and its state. */
+static void refresh_decoration(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    if (!toplevel->scene_tree)
+        return;
+    if (!wants_decoration(toplevel)) {
+        if (toplevel->deco)
+            wlr_scene_node_destroy(&toplevel->deco->node);
+        toplevel->deco = NULL;
+        return;
+    }
+    bool hovered = server->deco_hovered == toplevel;
+    struct wlr_buffer *buffer = deco_buffer(server, hovered);
+    if (!buffer)
+        return;
+    if (!toplevel->deco) {
+        toplevel->deco = wlr_scene_buffer_create(toplevel->scene_tree, buffer);
+        if (!toplevel->deco)
+            return;
+        wlr_scene_buffer_set_dest_size(toplevel->deco, SH_DECO_WIDTH, SH_DECO_HEIGHT);
+    } else {
+        wlr_scene_buffer_set_buffer(toplevel->deco, buffer);
+    }
+    struct wlr_box geometry = toplevel_geometry(toplevel);
+    wlr_scene_node_set_position(&toplevel->deco->node, geometry.x + SH_DECO_MARGIN,
+                                geometry.y + SH_DECO_MARGIN);
+    wlr_scene_node_raise_to_top(&toplevel->deco->node);
+    wlr_scene_node_set_enabled(&toplevel->deco->node,
+                               !toplevel->fullscreen || server->deco_revealed == toplevel);
+}
+
+static void forget_decoration(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    if (server->deco_hovered == toplevel)
+        server->deco_hovered = NULL;
+    if (server->deco_revealed == toplevel)
+        server->deco_revealed = NULL;
+    if (server->deco_pressed == toplevel)
+        server->deco_pressed = NULL;
+    toplevel->deco = NULL; // destroyed with the scene tree
+}
+
+/* The window whose pill is at (x, y), and which part of it. */
+static struct sh_toplevel *deco_at(struct sh_server *server, double x, double y,
+                                   enum sh_deco_part *part) {
+    double sx, sy;
+    struct wlr_scene_node *node = wlr_scene_node_at(&server->scene->tree.node, x, y, &sx, &sy);
+    if (!node || node->type != WLR_SCENE_NODE_BUFFER || !node->parent)
+        return NULL;
+    struct sh_node *owner = node->parent->node.data;
+    if (!owner || owner->kind != SH_NODE_TOPLEVEL)
+        return NULL;
+    struct sh_toplevel *toplevel = owner->owner;
+    if (!toplevel->deco || &toplevel->deco->node != node)
+        return NULL;
+    *part = sh_decoration_part_at(sx, sy);
+    return *part == SH_DECO_NONE ? NULL : toplevel;
+}
+
+static void set_deco_hovered(struct sh_server *server, struct sh_toplevel *toplevel) {
+    struct sh_toplevel *old = server->deco_hovered;
+    if (old == toplevel)
+        return;
+    server->deco_hovered = toplevel;
+    if (old)
+        refresh_decoration(old);
+    if (toplevel)
+        refresh_decoration(toplevel);
+}
+
+static void deco_activate(struct sh_toplevel *toplevel, enum sh_deco_part part) {
+    switch (part) {
+    case SH_DECO_CLOSE:
+        toplevel_close(toplevel);
+        break;
+    case SH_DECO_MINIMIZE:
+        minimize_toplevel(toplevel);
+        break;
+    case SH_DECO_FULLSCREEN:
+        set_fullscreen(toplevel, !toplevel->fullscreen);
+        break;
+    default:
+        break;
+    }
+}
+
 static void process_cursor_motion(struct sh_server *server, uint32_t time) {
     if (server->seat->drag)
         wlr_scene_node_set_position(&server->drag_icons->node, server->cursor->x,
@@ -1107,9 +1234,28 @@ static void process_cursor_motion(struct sh_server *server, uint32_t time) {
 
     double sx, sy;
     struct wlr_seat *seat = server->seat;
+    struct sh_toplevel *revealed = server->deco_revealed;
+    if (revealed && !in_deco_corner(revealed, server->cursor->x, server->cursor->y)) {
+        server->deco_revealed = NULL;
+        refresh_decoration(revealed);
+    }
+    enum sh_deco_part part;
+    struct sh_toplevel *decorated = deco_at(server, server->cursor->x, server->cursor->y, &part);
+    set_deco_hovered(server, decorated);
+    if (decorated) {
+        server->shape_edges = 0;
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
+        wlr_seat_pointer_clear_focus(seat);
+        return;
+    }
     struct wlr_surface *surface = NULL;
     struct sh_toplevel *toplevel =
         desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+    if (toplevel && toplevel->deco && toplevel->fullscreen && !server->deco_revealed &&
+        in_deco_corner(toplevel, server->cursor->x, server->cursor->y)) {
+        server->deco_revealed = toplevel;
+        refresh_decoration(toplevel);
+    }
     if (!surface) {
         server->shape_edges = 0;
         wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
@@ -1160,11 +1306,41 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
     struct sh_server *server = wl_container_of(listener, server, cursor_button);
     struct wlr_pointer_button_event *event = data;
     wlr_idle_notifier_v1_notify_activity(server->idle_notifier, server->seat);
+    if (server->deco_pressed && event->button == BTN_LEFT &&
+        event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        // A dot acts on release, and only if the pointer is still on it.
+        struct sh_toplevel *pressed = server->deco_pressed;
+        server->deco_pressed = NULL;
+        enum sh_deco_part part;
+        if (deco_at(server, server->cursor->x, server->cursor->y, &part) == pressed &&
+            part == server->deco_pressed_part)
+            deco_activate(pressed, part);
+        process_cursor_motion(server, event->time_msec);
+        return;
+    }
     if (server->grab_button == event->button && event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
         server->grab_button = 0;
         finish_grab(server);
         reset_cursor_mode(server);
         process_cursor_motion(server, event->time_msec);
+        return;
+    }
+    enum sh_deco_part part;
+    struct sh_toplevel *decorated =
+        event->state == WL_POINTER_BUTTON_STATE_PRESSED && !server->locked && !server->deco_pressed
+            ? deco_at(server, server->cursor->x, server->cursor->y, &part)
+            : NULL;
+    if (decorated) {
+        focus_toplevel(decorated);
+        if (event->button != BTN_LEFT)
+            return;
+        if (part == SH_DECO_PILL) {
+            server->grab_button = BTN_LEFT;
+            begin_interactive(decorated, SH_CURSOR_MOVE, 0);
+        } else {
+            server->deco_pressed = decorated;
+            server->deco_pressed_part = part;
+        }
         return;
     }
     if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -2139,6 +2315,7 @@ static void unmap_toplevel(struct sh_toplevel *toplevel) {
     if (toplevel == toplevel->server->grabbed_toplevel) {
         reset_cursor_mode(toplevel->server);
     }
+    forget_decoration(toplevel);
 
     toplevel->fullscreen = false;
     untile_toplevel(toplevel, false);
@@ -2323,6 +2500,7 @@ static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen) {
     }
     if (server->focused_toplevel == toplevel || fullscreen)
         focus_toplevel(toplevel);
+    refresh_decoration(toplevel);
 }
 
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
@@ -2399,6 +2577,7 @@ static void xwayland_map(struct wl_listener *listener, void *data) {
     toplevel->scene_tree->node.data = &toplevel->node;
     map_toplevel(toplevel, xsurface->fullscreen,
                  xsurface->maximized_horz && xsurface->maximized_vert);
+    refresh_decoration(toplevel);
 }
 
 static void xwayland_unmap(struct wl_listener *listener, void *data) {
@@ -2448,6 +2627,7 @@ static void xwayland_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->x_configure.link);
     wl_list_remove(&toplevel->x_activate.link);
     wl_list_remove(&toplevel->x_geometry.link);
+    wl_list_remove(&toplevel->x_decorations.link);
     wl_list_remove(&toplevel->destroy.link);
     wl_list_remove(&toplevel->request_move.link);
     wl_list_remove(&toplevel->request_resize.link);
@@ -2461,6 +2641,12 @@ static void xwayland_destroy(struct wl_listener *listener, void *data) {
 
 static bool xwayland_managed(struct sh_toplevel *toplevel) {
     return toplevel_mapped(toplevel) && !toplevel->unmanaged;
+}
+
+static void xwayland_set_decorations(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_decorations);
+    if (xwayland_managed(toplevel))
+        refresh_decoration(toplevel);
 }
 
 static void xwayland_request_configure(struct wl_listener *listener, void *data) {
@@ -2557,6 +2743,7 @@ static void server_new_xwayland_surface(struct wl_listener *listener, void *data
         {&toplevel->x_configure, &xsurface->events.request_configure, xwayland_request_configure},
         {&toplevel->x_activate, &xsurface->events.request_activate, xwayland_request_activate},
         {&toplevel->x_geometry, &xsurface->events.set_geometry, xwayland_set_geometry},
+        {&toplevel->x_decorations, &xsurface->events.set_decorations, xwayland_set_decorations},
         {&toplevel->request_move, &xsurface->events.request_move, xwayland_request_move},
         {&toplevel->request_resize, &xsurface->events.request_resize, xwayland_request_resize},
         {&toplevel->request_maximize, &xsurface->events.request_maximize,
@@ -3260,6 +3447,8 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
 
     wlr_backend_destroy(server.backend);
     wlr_scene_node_destroy(&server.scene->tree.node);
+    for (int i = 0; i < 2; ++i)
+        wlr_buffer_drop(server.deco_buffers[i]);
     wlr_xcursor_manager_destroy(server.cursor_mgr);
     wlr_cursor_destroy(server.cursor);
     wlr_allocator_destroy(server.allocator);

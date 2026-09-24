@@ -77,8 +77,12 @@ The host compositor can consume shortcuts before the nested compositor receives
 them; edit the Lua bindings if necessary. SIGHUP also requests a reload, and
 SIGINT/SIGTERM requests shutdown. A reload does not rerun startup commands.
 
-Initial limitations: snapping is keyboard-driven, without edge-drag previews. Decorations
-come from clients. Fullscreen covers the panel while the window is focused;
+Windows that leave decorations to the window manager (X11 applications such as Spotify)
+get three small macOS-style dots over their top-left corner: close, minimize, and
+fullscreen. Dragging the pill around the dots moves the window; over a fullscreen window
+the dots appear when the pointer nears that corner. Other windows decorate themselves.
+
+Initial limitations: snapping is keyboard-driven, without edge-drag previews. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
 client's next buffer.

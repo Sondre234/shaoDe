@@ -72,7 +72,7 @@ if(SHAODE_BUILD_COMPOSITOR)
         ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml
         ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h
         DEPENDS ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml)
-    add_executable(shaode src/main.cpp src/backend.c
+    add_executable(shaode src/main.cpp src/backend.c src/decoration.c
         ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h ${WLR_PROTOCOL_HEADERS})
     target_include_directories(shaode PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_definitions(shaode PRIVATE WLR_USE_UNSTABLE)
@@ -80,7 +80,7 @@ if(SHAODE_BUILD_COMPOSITOR)
         SHAODE_VERSION="${PROJECT_VERSION}"
         SHAODE_DEFAULT_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/shaode/init.lua")
     target_compile_options(shaode PRIVATE -Wall -Wextra -Wno-unused-parameter)
-    target_link_libraries(shaode PRIVATE shaode_config PkgConfig::WLROOTS PkgConfig::WAYLAND)
+    target_link_libraries(shaode PRIVATE shaode_config PkgConfig::WLROOTS PkgConfig::WAYLAND m)
     # X11 support follows the wlroots build; the XWM waker needs xcb directly.
     find_file(SHAODE_WLR_CONFIG_H wlr/config.h PATHS ${WLROOTS_INCLUDE_DIRS} NO_DEFAULT_PATH)
     file(READ ${SHAODE_WLR_CONFIG_H} SHAODE_WLR_CONFIG)
