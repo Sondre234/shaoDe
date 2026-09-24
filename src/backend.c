@@ -1243,9 +1243,18 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     wlr_output_state_init(&state);
     wlr_output_state_set_enabled(&state, true);
 
+    // Monitors often mark a 60 Hz mode as preferred; keep that resolution at its fastest refresh.
     struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
     if (mode != NULL) {
-        wlr_output_state_set_mode(&state, mode);
+        struct wlr_output_mode *fastest = mode, *candidate;
+        wl_list_for_each(candidate, &wlr_output->modes, link) {
+            if (candidate->width == mode->width && candidate->height == mode->height &&
+                candidate->refresh > fastest->refresh)
+                fastest = candidate;
+        }
+        wlr_output_state_set_mode(&state, fastest);
+        if (fastest != mode && !wlr_output_test_state(wlr_output, &state))
+            wlr_output_state_set_mode(&state, mode);
     }
 
     wlr_output_commit_state(wlr_output, &state);
