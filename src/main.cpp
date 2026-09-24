@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
 
@@ -42,11 +43,32 @@ pid_t spawn(const shaode::Command &command) {
         std::cerr << "Cannot launch " << command.front() << ": " << std::strerror(error) << '\n';
     return error ? -1 : pid;
 }
+/* D-Bus-activated services such as xdg-desktop-portal start with the bus's environment, not
+ * ours, so screen sharing and file choosers need to learn about this session. Only a standalone
+ * session may do this: a nested one would point the host's portals at itself. */
+void export_activation_environment() {
+    shaode::Command command{"dbus-update-activation-environment", "--systemd"};
+    for (const char *name :
+         {"WAYLAND_DISPLAY", "DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "SHAODE_SOCKET"})
+        if (const char *value = std::getenv(name); value && *value)
+            command.emplace_back(name);
+    pid_t pid = spawn(command);
+    // Wait briefly, so a portal started by the first applications already sees this session.
+    for (int tries = 0; pid > 0 && tries < 100; ++tries) {
+        int status;
+        if (waitpid(pid, &status, WNOHANG) != 0)
+            return;
+        usleep(20000);
+    }
+    if (pid > 0)
+        std::cerr << "dbus-update-activation-environment is still running; not waiting\n";
+}
 struct Runtime {
     std::filesystem::path path;
     shaode::Config config;
     shaode::Command extra_command;
     bool allow_shell = false;
+    bool standalone = false;
     pid_t shell_pid = -1;
 
     void start_shell() {
@@ -135,6 +157,8 @@ struct Runtime {
     }
     static void startup(void *data) {
         auto &self = *static_cast<Runtime *>(data);
+        if (self.standalone)
+            export_activation_environment();
         self.start_shell();
         for (const auto &command : self.config.startup)
             spawn(command);
@@ -254,6 +278,7 @@ int main(int argc, char **argv) {
         Runtime runtime{std::filesystem::absolute(path), shaode::load_config(path),
                         std::move(command)};
         runtime.allow_shell = !no_shell && mode != SH_BACKEND_HEADLESS;
+        runtime.standalone = mode == SH_BACKEND_SESSION;
         if (check) {
             std::cout << "Configuration valid: " << path << " (" << runtime.config.bindings.size()
                       << " bindings)\n";

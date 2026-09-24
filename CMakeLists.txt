@@ -104,6 +104,8 @@ if(SHAODE_BUILD_COMPOSITOR)
     install(FILES vendor/tinywl/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/shaode
         RENAME TinyWL-LICENSE)
     install(DIRECTORY protocols/ DESTINATION ${CMAKE_INSTALL_DATADIR}/shaode/protocols)
+    install(FILES packaging/shaode-portals.conf
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal)
     if(SHAODE_INSTALL_SESSION)
         configure_file(packaging/shaode.desktop.in shaode.desktop @ONLY)
         install(FILES ${CMAKE_CURRENT_BINARY_DIR}/shaode.desktop

@@ -3180,6 +3180,11 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     open_control_socket(&server, socket);
     setenv("XDG_CURRENT_DESKTOP", "shaoDe", true);
     setenv("XDG_SESSION_TYPE", "wayland", true);
+    // Firefox, Electron (Discord, VS Code), and Java would otherwise need to be told to use
+    // Wayland or to cope without a reparenting window manager. The user's own values win.
+    setenv("MOZ_ENABLE_WAYLAND", "1", false);
+    setenv("ELECTRON_OZONE_PLATFORM_HINT", "auto", false);
+    setenv("_JAVA_AWT_WM_NONREPARENTING", "1", false);
     unsetenv("DISPLAY");
 #if WLR_HAS_XWAYLAND
     // Xwayland starts when the first X11 client connects and exits once idle.

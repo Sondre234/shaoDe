@@ -24,6 +24,11 @@ between release series. Relevant Gentoo packages are:
 - Python 3 for the automated tests; a Wayland terminal for interactive testing
 - Optional: `gui-apps/swaylock` (or another ext-session-lock locker) and
   `gui-apps/swayidle` for locking and idle timeouts
+- For screen sharing (Discord, browsers, OBS) and file choosers:
+  `gui-libs/xdg-desktop-portal-wlr`, `sys-apps/xdg-desktop-portal-gtk`,
+  `media-video/pipewire` running in the user session, and `gui-apps/slurp` for choosing
+  a monitor. Without systemd, start the session under `dbus-run-session` as shown below so
+  portals can be activated.
 
 Standalone operation requires wlroots built with `drm`, `libinput`, and `session`
 USE flags. X11 applications additionally need wlroots with the `X` USE flag and
@@ -124,8 +129,7 @@ desktop (NVIDIA proprietary driver, three monitors). Hybrid-GPU outputs, hotplug
 and VT switching on NVIDIA are untested. Start it from the console, not over SSH:
 a process outside the console's logind session cannot switch VTs.
 Keep another TTY available while testing. Set monitor order with `outputs.order`
-and `outputs.primary`; per-monitor modes and scaling are not configurable yet,
-and portals are not implemented; this is not ready to
+and `outputs.primary`; per-monitor modes and scaling are not configurable yet; this is not ready to
 replace a secured daily session.
 
 References:

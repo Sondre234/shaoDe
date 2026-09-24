@@ -81,7 +81,7 @@ Initial limitations: snapping is keyboard-driven, without edge-drag previews. De
 come from clients. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
-client's next buffer. There is no portal integration yet.
+client's next buffer.
 
 ## Tiling
 
@@ -109,6 +109,19 @@ keep their place until it returns.
 Workspaces are shared across outputs; `layout.workspaces` sets how many (1–10).
 The taskbar lists windows from every workspace, and activating one switches to its
 workspace. Window shortcuts act only on the current workspace.
+
+Portals run as D-Bus services, started with the bus's environment rather than the
+compositor's. A standalone `--session` therefore exports `WAYLAND_DISPLAY`, `DISPLAY`,
+`XDG_CURRENT_DESKTOP=shaoDe`, `XDG_SESSION_TYPE`, and `SHAODE_SOCKET` with
+`dbus-update-activation-environment --systemd` before it starts anything; the nested mode
+leaves the host's portals alone, so its applications share and pick files through the host.
+The installed `shaode-portals.conf` selects `xdg-desktop-portal-wlr` for screen sharing and
+screenshots and `xdg-desktop-portal-gtk` for everything else. Install both, plus PipeWire
+and `slurp` (the wlr portal's monitor picker on multi-monitor setups). An
+`xdg-desktop-portal` that is already running keeps the desktop it started with; after
+leaving another desktop, run `systemctl --user restart xdg-desktop-portal` once or log out
+fully. The session also sets `MOZ_ENABLE_WAYLAND=1`, `ELECTRON_OZONE_PLATFORM_HINT=auto`,
+and `_JAVA_AWT_WM_NONREPARENTING=1` unless they are already set.
 
 Monitors sit side by side, top-aligned. `outputs.order` lists connector names
 (such as `DP-3`) left to right; unlisted monitors follow on the right in the order
@@ -217,7 +230,7 @@ remaining limitations.
 4. **Done:** automatic dwindle tiling with a panel toggle. Next: drag-to-edge previews,
    window rules, and Lua extension APIs shared by mouse controls and shortcuts.
 5. Session integration: multi-monitor policy, notifications, tray,
-   portals/screen sharing, power and audio controls.
+   power and audio controls. Done: portals and screen sharing.
 
 The compositor targets wlroots 0.20 specifically, because its API changes
 between release series. Develop nested inside the existing Wayland session first.

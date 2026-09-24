@@ -126,7 +126,8 @@ the console's keyboard stayed unusable until a reboot. Start `--session` from th
 console itself. VT switching on NVIDIA therefore remains unverified.
 
 Clients noted that shaoDe lacks xdg-activation, primary selection, fractional
-scaling, and server-side decorations.
+scaling, and server-side decorations. All but server-side decorations were added later
+(see the browser checkpoint below).
 
 Still untested on hardware: VT switching on NVIDIA, hotplug, suspend/resume, lid
 close, and brightness/volume keys.
@@ -141,3 +142,17 @@ the toggle, splitting on map, refill after moving a tile to another workspace,
 test clicks the panel button against a stand-in control socket. Mouse resizing
 and drag-to-retile of tiles have not yet been exercised in a nested or physical
 session.
+
+## Browser, Electron, and screen capture checkpoint
+
+Added 2026-09-24. In a headless session on the NVIDIA desktop's GLES2 renderer,
+Firefox 154 and Discord 1.0.158 (Electron, both `--ozone-platform=wayland` and via
+XWayland) mapped, rendered, and appeared in `shaode msg get windows`, using
+linux-dmabuf and explicit sync. `wl-copy --primary` / `wl-paste --primary` round-tripped
+the primary selection. `grim` captured the output (wlr-screencopy), and `grim -T`
+captured Firefox's window alone through ext-foreign-toplevel-list and the per-window
+capture source. `compositor_smoke` checks that every one of these globals is advertised.
+
+Not yet exercised: screen sharing end to end through xdg-desktop-portal-wlr and
+PipeWire, the D-Bus environment export in a physical `--session`, drag-and-drop, pointer
+lock, and popup placement at output edges.
