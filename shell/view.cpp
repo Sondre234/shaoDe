@@ -56,6 +56,7 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
     if (!preview) {
         using W = LayerShellQt::Window;
         layer_ = W::get(this);
+        layer_->setScreen(screen);
         layer_->setScope(desktop ? "shaode-desktop" : "shaode-panel");
         layer_->setLayer(desktop ? W::LayerBackground : W::LayerTop);
         layer_->setAnchors(

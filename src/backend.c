@@ -2085,7 +2085,11 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
     bool resize = false;
     struct wlr_box geometry = toplevel_geometry(toplevel);
     int width = geometry.width, height = geometry.height;
-    struct wlr_output *output = toplevel_output(toplevel);
+    // New windows open on the output under the pointer, as in Hyprland.
+    struct wlr_output *output =
+        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
+    if (!output)
+        output = toplevel_output(toplevel);
     if (output) {
         struct wlr_box area;
         usable_area(toplevel->server, output, &area);
@@ -2111,13 +2115,12 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
     publish_toplevel(toplevel);
     toplevel->floating = toplevel_is_dialog(toplevel);
     if (wants_tiling(toplevel)) {
-        // As in Hyprland: split the focused tile, else the tile under the pointer.
-        bool split_focused = previous && previous->tiled && toplevel_visible(previous);
-        struct wlr_output *output =
-            split_focused ? tiled_output(previous)
-                          : wlr_output_layout_output_at(server->output_layout, server->cursor->x,
-                                                        server->cursor->y);
-        tile_toplevel(toplevel, output, split_focused ? previous : NULL, true);
+        // As in Hyprland: split the focused tile when it is on the pointer's output, else the
+        // tile under the pointer.
+        bool split_focused = previous && previous->tiled && toplevel_visible(previous) &&
+                             (!output || tiled_output(previous) == output);
+        tile_toplevel(toplevel, split_focused ? tiled_output(previous) : output,
+                      split_focused ? previous : NULL, true);
     }
     focus_toplevel(toplevel);
     if (fullscreen)

@@ -89,8 +89,9 @@ The tiling button on the panel (next to the clock), Alt + Shift + T, or
 `shaode msg toggle_tiling` switches between floating windows and automatic tiling;
 Lua `layout.tiling = true` starts tiled. Tiling follows Hyprland's default *dwindle*
 layout: every output and workspace has its own binary split tree, each split divides
-its space along the longer side, and a new window splits the focused window (or the
-one under the pointer) on the side nearer the pointer. Closing a window gives its
+its space along the longer side, and a new window opens on the output under the
+pointer, splitting the focused window there (or the one under the pointer) on the side
+nearer the pointer. Floating windows also open on the pointer's output. Closing a window gives its
 space back to its neighbour.
 
 - Mod + right drag on a tile, or dragging its edge, moves the split lines around it.
