@@ -308,6 +308,7 @@ static void create_popup(struct sh_server *server, struct wlr_xdg_popup *popup,
                          struct wlr_scene_tree *parent);
 static void lock_output_presented(struct sh_output *output);
 static void notify_subscribers(struct sh_server *server);
+static void request_launcher(struct sh_server *server);
 static void refit_fullscreen(struct sh_server *server);
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void reload_config(struct sh_server *server);
@@ -679,6 +680,9 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
         break;
     case SH_TOGGLE_TILING:
         set_tiling(server, !server->tiling_enabled);
+        break;
+    case SH_LAUNCHER:
+        request_launcher(server);
         break;
     case SH_TOGGLE_FLOATING:
         if (current && current->tiled) {
@@ -2949,8 +2953,9 @@ static void control_client_close(struct sh_control_client *client) {
     free(client);
 }
 
-/* Subscribers get "tiling on|off" and "workspace N" lines; a subscriber that cannot keep up
- * is dropped rather than blocking the compositor. */
+/* Subscribers get "tiling on|off" and "workspace N" lines, and "launcher OUTPUT" when a
+ * binding asks the shell for its application menu; a subscriber that cannot keep up is
+ * dropped rather than blocking the compositor. */
 static bool control_send_state(struct sh_control_client *client) {
     struct sh_server *server = client->server;
     char state[64];
@@ -2963,6 +2968,22 @@ static void notify_subscribers(struct sh_server *server) {
     struct sh_control_client *client, *temporary;
     wl_list_for_each_safe(client, temporary, &server->subscribers, link) {
         if (!control_send_state(client))
+            control_client_close(client);
+    }
+}
+
+static void request_launcher(struct sh_server *server) {
+    struct wlr_output *output =
+        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
+    if (!output)
+        return;
+    char line[128];
+    int length = snprintf(line, sizeof(line), "launcher %s\n", output->name);
+    if (length < 0 || (size_t)length >= sizeof(line))
+        return;
+    struct sh_control_client *client, *temporary;
+    wl_list_for_each_safe(client, temporary, &server->subscribers, link) {
+        if (send(client->fd, line, (size_t)length, MSG_NOSIGNAL | MSG_DONTWAIT) != length)
             control_client_close(client);
     }
 }

@@ -50,6 +50,7 @@ class ShellController : public QObject {
     void errorChanged();
     void disabled();
     void tilingChanged();
+    void launcherRequested(const QString &output);
 
   private:
     struct App {

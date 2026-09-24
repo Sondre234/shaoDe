@@ -59,6 +59,7 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | --- | --- |
 | Super + left/right drag | Move / resize a window (on a tile: move it, or move its splits) |
 | Super + Q | Launch Kitty |
+| Super + R | Open or close the application menu on the monitor under the pointer |
 | Super + C | Close focused window |
 | Super + M | Exit shaoDe |
 | Super + V | Float or tile the focused window |
@@ -141,7 +142,8 @@ A control socket runs any Lua action from scripts or other tools:
 `on` or `off`, and `shaode msg get windows` prints one tab-separated line per window:
 workspace, focused, minimized, tiled, x, y, width, height, app ID, and title. A client
 that sends `subscribe` keeps its connection and receives `tiling on|off` and
-`workspace N` lines after every change; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
+`workspace N` lines after every change, plus `launcher OUTPUT` when the `launcher` action
+(Super + R) asks the panel on that monitor to open or close its application menu; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
 refused while the session is locked.
 
 Screen locking uses the standard `ext-session-lock-v1` protocol, so lockers such

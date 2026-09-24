@@ -27,7 +27,8 @@ enum sh_action {
     SH_WORKSPACE_NEXT,
     SH_WORKSPACE_PREV,
     SH_TOGGLE_TILING,
-    SH_TOGGLE_FLOATING
+    SH_TOGGLE_FLOATING,
+    SH_LAUNCHER /* asks the shell to toggle its application menu */
 };
 
 /* Modifier and edge bits intentionally match wlroots, without importing its headers. */

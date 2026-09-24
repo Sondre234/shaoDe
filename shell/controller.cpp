@@ -168,7 +168,10 @@ void ShellController::subscribe() {
                 subscribed_ = true;
             else if (line.startsWith("tiling "))
                 tiling_ = line == "tiling on";
-            else
+            else if (line.startsWith("launcher ")) {
+                Q_EMIT launcherRequested(line.sliced(9));
+                continue;
+            } else
                 continue;
             Q_EMIT tilingChanged();
         }

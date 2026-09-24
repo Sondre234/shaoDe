@@ -35,6 +35,7 @@ return {
     startup = {}, -- e.g. { { "kitty" } }
     bindings = {
         { mods = { mod }, key = "q", action = "spawn", command = { "kitty" } },
+        { mods = { mod }, key = "r", action = "launcher" },
         { mods = { mod }, key = "c", action = "close" },
         { mods = { mod }, key = "m", action = "quit" },
         { mods = { mod }, key = "v", action = "toggle_floating" },

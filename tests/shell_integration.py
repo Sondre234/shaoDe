@@ -32,6 +32,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
                      processes, "compositor startup")
             env["WAYLAND_DISPLAY"] = re.search(
                 r"WAYLAND_DISPLAY=(\S+)", compositor_log.read_text())[1]
+            env["SHAODE_SOCKET"] = re.search(
+                r"Control socket: (\S+)", compositor_log.read_text())[1]
             desktop = subprocess.Popen([shell, "--config", str(config)], env=env,
                                        stdout=shell_output, stderr=shell_output)
             processes.append(desktop)
@@ -44,6 +46,26 @@ with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
                                check=True, timeout=5)
 
             check_panel(52)
+            # The launcher action reaches the panel on the output under the pointer.
+            def launcher():
+                subprocess.run([compositor, "msg", "launcher"], env=env, check=True,
+                               capture_output=True, timeout=5)
+
+            def opened():
+                return "shaoDe launcher opened on" in shell_log.read_text()
+
+            # The shell subscribes asynchronously: resend until the first request arrives.
+            for _ in range(10):
+                launcher()
+                try:
+                    wait_for(opened, processes, "launcher opened", timeout=.5)
+                    break
+                except AssertionError:
+                    pass
+            assert opened() and "launcher closed" not in shell_log.read_text()
+            launcher()
+            wait_for(lambda: "shaoDe launcher closed on" in shell_log.read_text(),
+                     processes, "launcher closed")
             # A live panel-height change must alter maximized client geometry.
             config.write_text(source.replace("panel_height = 52", "panel_height = 72"))
             desktop.send_signal(signal.SIGHUP)
@@ -65,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
                 assert message not in shell_log.read_text(), shell_log.read_text()
             server.terminate()
             assert server.wait(timeout=5) == 0, compositor_log.read_text()
-            print("Qt desktop/panel rendering, reservation, resize, rejection, and disable passed")
+            print("Qt desktop/panel rendering, launcher action, reservation, resize, rejection, and disable passed")
         except Exception:
             print(compositor_log.read_text(), shell_log.read_text(), file=sys.stderr)
             raise

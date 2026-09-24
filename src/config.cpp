@@ -343,6 +343,7 @@ sh_action parse_action(const std::string &name) {
         {"workspace_prev", SH_WORKSPACE_PREV},
         {"toggle_tiling", SH_TOGGLE_TILING},
         {"toggle_floating", SH_TOGGLE_FLOATING},
+        {"launcher", SH_LAUNCHER},
     };
     for (const auto &[candidate, action] : actions)
         if (name == candidate)

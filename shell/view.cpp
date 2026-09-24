@@ -6,6 +6,7 @@
 #include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QScreen>
+#include <iostream>
 #if SHAODE_LAYER_SHELL
 #include <LayerShellQt/Window>
 #endif
@@ -75,6 +76,14 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
             layer_->setExclusiveZone(controller_.panelHeight());
 #endif
         resizeForContent();
+    });
+    connect(&controller, &ShellController::launcherRequested, this, [this](const QString &output) {
+        if (desktop_ || !rootObject() || outputScreen_->name() != output)
+            return;
+        bool open = !rootObject()->property("launcherOpen").toBool();
+        rootObject()->setProperty("launcherOpen", open);
+        std::cerr << "shaoDe launcher " << (open ? "opened" : "closed") << " on "
+                  << output.toStdString() << '\n';
     });
     connect(screen, &QScreen::geometryChanged, this, [this] { resizeForContent(); });
     connect(this, &QWindow::activeChanged, this, [this] {
