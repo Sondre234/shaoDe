@@ -1643,19 +1643,26 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
     }
 }
 
+/* Client decorations often live in subsurfaces (kitty's title bar), so the clicked surface
+ * only has to belong to the toplevel, not be its root surface. */
+static bool validate_grab_serial(struct sh_toplevel *toplevel, uint32_t serial) {
+    struct wlr_seat *seat = toplevel->server->seat;
+    struct wlr_surface *focused = seat->pointer_state.focused_surface;
+    return wlr_seat_validate_pointer_grab_serial(seat, NULL, serial) && focused &&
+           wlr_surface_get_root_surface(focused) == toplevel->xdg_toplevel->base->surface;
+}
+
 static void xdg_toplevel_request_move(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_move);
     struct wlr_xdg_toplevel_move_event *event = data;
-    if (wlr_seat_validate_pointer_grab_serial(toplevel->server->seat,
-                                              toplevel->xdg_toplevel->base->surface, event->serial))
+    if (validate_grab_serial(toplevel, event->serial))
         begin_interactive(toplevel, SH_CURSOR_MOVE, 0);
 }
 
 static void xdg_toplevel_request_resize(struct wl_listener *listener, void *data) {
     struct wlr_xdg_toplevel_resize_event *event = data;
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_resize);
-    if (wlr_seat_validate_pointer_grab_serial(toplevel->server->seat,
-                                              toplevel->xdg_toplevel->base->surface, event->serial))
+    if (validate_grab_serial(toplevel, event->serial))
         begin_interactive(toplevel, SH_CURSOR_RESIZE, event->edges);
 }
 
