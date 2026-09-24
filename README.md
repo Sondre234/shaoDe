@@ -141,6 +141,12 @@ xdg-activation lets an application raise itself, so a link clicked in a chat bri
 browser forward; shaoDe honours every valid token and does not prevent focus stealing.
 Popup menus are kept on the output of their window.
 
+Screenshots and screen sharing use wlr-screencopy, export-dmabuf, and
+ext-image-copy-capture, so `grim` works directly and Discord, OBS, or a browser share a
+monitor or a single window through xdg-desktop-portal-wlr. A shared window is drawn on
+its own, without whatever overlaps it, and keeps streaming while minimized or on another
+workspace.
+
 X11 applications run through XWayland when wlroots is built with X support and
 `Xwayland` is installed. `DISPLAY` is set from the start, but Xwayland only
 starts when the first X11 client connects and exits again once idle (Lua

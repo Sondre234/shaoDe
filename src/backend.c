@@ -30,6 +30,10 @@
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_ext_data_control_v1.h>
+#include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
+#include <wlr/types/wlr_export_dmabuf_v1.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
@@ -48,6 +52,7 @@
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
+#include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_session_lock_v1.h>
@@ -130,6 +135,8 @@ struct sh_server {
     struct sh_layer *focused_layer;
     struct sh_toplevel *focused_toplevel;
     struct wlr_foreign_toplevel_manager_v1 *foreign_manager;
+    struct wlr_ext_foreign_toplevel_list_v1 *toplevel_list; // windows offered for screen sharing
+    struct wl_listener new_capture_request;
 
     /* Session lock: `locked` outlives a crashed locker so the screen stays covered. */
     bool locked;
@@ -211,6 +218,11 @@ struct sh_toplevel {
     bool minimized;
     int workspace;
     struct wlr_foreign_toplevel_handle_v1 *foreign;
+    /* Window capture: a private scene holding only this window's surfaces, so sharing one
+     * window never shows what overlaps it. */
+    struct wlr_ext_foreign_toplevel_handle_v1 *listed;
+    struct wlr_scene *capture_scene;
+    struct wlr_ext_image_capture_source_v1 *capture_source;
     struct wl_listener title_changed, app_id_changed;
     struct wl_listener foreign_activate, foreign_close, foreign_maximize, foreign_minimize;
     struct wl_listener foreign_fullscreen;
@@ -1834,19 +1846,72 @@ static void toplevel_request_minimize(struct wl_listener *listener, void *data) 
     if (toplevel_mapped(toplevel))
         minimize_toplevel(toplevel);
 }
+static void update_listed_state(struct sh_toplevel *toplevel) {
+    if (!toplevel->listed)
+        return;
+    const char *title = toplevel_title(toplevel), *app_id = toplevel_app_id(toplevel);
+    struct wlr_ext_foreign_toplevel_handle_v1_state state = {title ? title : "Untitled",
+                                                              app_id ? app_id : ""};
+    wlr_ext_foreign_toplevel_handle_v1_update_state(toplevel->listed, &state);
+}
 static void toplevel_title_changed(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, title_changed);
     const char *title = toplevel_title(toplevel);
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_title(toplevel->foreign, title ? title : "Untitled");
+    update_listed_state(toplevel);
 }
 static void toplevel_app_id_changed(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, app_id_changed);
     const char *app_id = toplevel_app_id(toplevel);
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_app_id(toplevel->foreign, app_id ? app_id : "");
+    update_listed_state(toplevel);
+}
+static void list_toplevel(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    toplevel->capture_scene = wlr_scene_create();
+    if (!toplevel->capture_scene)
+        return;
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        wlr_scene_subsurface_tree_create(&toplevel->capture_scene->tree, toplevel_surface(toplevel));
+    else
+#endif
+        wlr_scene_xdg_surface_create(&toplevel->capture_scene->tree, toplevel->xdg_toplevel->base);
+    struct wlr_ext_foreign_toplevel_handle_v1_state state = {"", ""};
+    toplevel->listed = wlr_ext_foreign_toplevel_handle_v1_create(server->toplevel_list, &state);
+    if (toplevel->listed) {
+        toplevel->listed->data = toplevel;
+        update_listed_state(toplevel);
+    }
+}
+static void unlist_toplevel(struct sh_toplevel *toplevel) {
+    if (toplevel->listed)
+        wlr_ext_foreign_toplevel_handle_v1_destroy(toplevel->listed);
+    toplevel->listed = NULL;
+    // Destroying the scene also ends any capture source made from it.
+    if (toplevel->capture_scene)
+        wlr_scene_node_destroy(&toplevel->capture_scene->tree.node);
+    toplevel->capture_scene = NULL;
+    toplevel->capture_source = NULL;
+}
+static void server_new_capture_request(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_capture_request);
+    struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request *request = data;
+    struct sh_toplevel *toplevel = request->toplevel_handle->data;
+    if (!toplevel || !toplevel->capture_scene || server->locked)
+        return;
+    if (!toplevel->capture_source)
+        toplevel->capture_source = wlr_ext_image_capture_source_v1_create_with_scene_node(
+            &toplevel->capture_scene->tree.node, wl_display_get_event_loop(server->wl_display),
+            server->allocator, server->renderer);
+    if (toplevel->capture_source)
+        wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(
+            request, toplevel->capture_source);
 }
 static void publish_toplevel(struct sh_toplevel *toplevel) {
+    list_toplevel(toplevel);
     toplevel->foreign = wlr_foreign_toplevel_handle_v1_create(toplevel->server->foreign_manager);
     if (!toplevel->foreign)
         return;
@@ -1868,6 +1933,7 @@ static void publish_toplevel(struct sh_toplevel *toplevel) {
         wlr_foreign_toplevel_handle_v1_output_enter(toplevel->foreign, output);
 }
 static void unpublish_toplevel(struct sh_toplevel *toplevel) {
+    unlist_toplevel(toplevel);
     if (!toplevel->foreign)
         return;
     wl_list_remove(&toplevel->foreign_activate.link);
@@ -3027,6 +3093,16 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     server.new_layer_surface.notify = server_new_layer_surface;
     wl_signal_add(&server.layer_shell->events.new_surface, &server.new_layer_surface);
     server.foreign_manager = wlr_foreign_toplevel_manager_v1_create(server.wl_display);
+    // Screen capture for screenshots and portal screen sharing (xdg-desktop-portal-wlr).
+    wlr_screencopy_manager_v1_create(server.wl_display);
+    wlr_export_dmabuf_manager_v1_create(server.wl_display);
+    wlr_ext_image_copy_capture_manager_v1_create(server.wl_display, 1);
+    wlr_ext_output_image_capture_source_manager_v1_create(server.wl_display, 1);
+    server.toplevel_list = wlr_ext_foreign_toplevel_list_v1_create(server.wl_display, 1);
+    struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1 *toplevel_capture =
+        wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(server.wl_display, 1);
+    server.new_capture_request.notify = server_new_capture_request;
+    wl_signal_add(&toplevel_capture->events.new_request, &server.new_capture_request);
     server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
     wl_list_init(&server.toplevels);
@@ -3168,6 +3244,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_list_remove(&server.keyboard_focus_change.link);
     wl_list_remove(&server.request_activate.link);
     wl_list_remove(&server.new_constraint.link);
+    wl_list_remove(&server.new_capture_request.link);
 
     wl_list_remove(&server.new_output.link);
     wl_list_remove(&server.new_lock.link);
