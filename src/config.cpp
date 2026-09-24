@@ -205,10 +205,18 @@ Config read(lua_State *L) {
     Config config;
     table(L, -1, "configuration result");
     keys(L, -1,
-         {"version", "appearance", "keyboard", "mouse", "layout", "bindings", "startup", "shell"});
+         {"version", "appearance", "keyboard", "mouse", "layout", "bindings", "startup", "shell",
+          "xwayland"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
+    lua_getfield(L, -1, "xwayland");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isboolean(L, -1))
+            fail("xwayland must be a boolean");
+        config.settings.xwayland = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
     lua_getfield(L, -1, "appearance");
     if (!lua_isnil(L, -1)) {
         table(L, -1, "appearance");

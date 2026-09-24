@@ -38,6 +38,8 @@ struct probe {
     struct buffer *buffers;
     int width, height, stage;
     bool maximized, fullscreen, handle_fullscreen, done, external_control, external_panel;
+    const char *close_app_id;
+    struct zwlr_foreign_toplevel_handle_v1 *close_target;
 };
 static void die(const char *message) {
     fprintf(stderr, "wayland probe: %s\n", message);
@@ -53,7 +55,11 @@ static void handle_title(void *data, struct zwlr_foreign_toplevel_handle_v1 *han
     probe->title_seen = !strcmp(title, "shaoDe protocol probe");
 }
 static void handle_app_id(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle,
-                          const char *app_id) {}
+                          const char *app_id) {
+    struct probe *probe = data;
+    if (probe->close_app_id && !strcmp(app_id, probe->close_app_id))
+        probe->close_target = handle;
+}
 static void handle_output(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle,
                           struct wl_output *output) {}
 static void handle_state(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle,
@@ -280,8 +286,10 @@ int main(int argc, char **argv) {
             die("invalid external panel height");
         probe.external_panel = true;
         probe.panel_height = (int)height;
+    } else if (argc == 3 && !strcmp(argv[1], "--close")) {
+        probe.close_app_id = argv[2];
     } else if (argc != 1)
-        die("usage: wayland_probe [--external-control | --external-panel HEIGHT]");
+        die("usage: wayland_probe [--external-control | --external-panel HEIGHT | --close APP_ID]");
     struct wl_display *display = wl_display_connect(NULL);
     if (!display)
         die("cannot connect to compositor");
@@ -293,6 +301,18 @@ int main(int argc, char **argv) {
         die("required globals missing");
     if (!probe.layer_shell || !probe.manager || !probe.seat || !probe.output)
         die("desktop protocols missing");
+    if (probe.close_app_id) {
+        // Close another client's window through the taskbar protocol.
+        if (wl_display_roundtrip(display) < 0)
+            die("taskbar roundtrip failed");
+        if (!probe.close_target)
+            die("no taskbar handle with the requested app_id");
+        zwlr_foreign_toplevel_handle_v1_close(probe.close_target);
+        if (wl_display_roundtrip(display) < 0)
+            die("close request failed");
+        puts("taskbar close sent");
+        return 0;
+    }
     if (!probe.external_panel) {
         probe.panel_surface = wl_compositor_create_surface(probe.compositor);
         probe.panel = zwlr_layer_shell_v1_get_layer_surface(

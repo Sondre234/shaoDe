@@ -32,7 +32,7 @@ struct ShellConfig {
 };
 
 struct Config {
-    sh_settings settings{{0.10F, 0.13F, 0.18F, 1.0F}, SH_ALT, 25, 600, 8, "us", ""};
+    sh_settings settings{{0.10F, 0.13F, 0.18F, 1.0F}, SH_ALT, 25, 600, 8, "us", "", true};
     std::vector<Binding> bindings;
     std::vector<Command> startup;
     ShellConfig shell;

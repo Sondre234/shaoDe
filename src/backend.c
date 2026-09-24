@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -34,6 +35,10 @@
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
+#include <wlr/xcursor.h>
+#if WLR_HAS_XWAYLAND
+#include <wlr/xwayland.h>
+#endif
 #include <xkbcommon/xkbcommon.h>
 
 _Static_assert((unsigned)SH_ALT == (unsigned)WLR_MODIFIER_ALT &&
@@ -61,6 +66,17 @@ struct sh_server {
     struct wlr_scene_tree *backgrounds;
     struct wlr_scene_tree *windows;
     struct wlr_scene_tree *fullscreen;
+    struct wlr_scene_tree *unmanaged;
+#if WLR_HAS_XWAYLAND
+    struct wlr_xwayland *xwayland;
+    struct wl_listener xwayland_ready, new_xwayland_surface;
+    struct wl_event_source *startup_timeout;
+    xcb_connection_t *xwm_waker;
+    xcb_atom_t waker_atom;
+    xcb_window_t xwm_window;
+    struct wl_event_source *waker_timer, *waker_input;
+#endif
+    bool started;
     struct wlr_scene_tree *layer_trees[4];
     struct wl_list layers;
     struct wlr_layer_shell_v1 *layer_shell;
@@ -134,7 +150,12 @@ struct sh_toplevel {
     bool arranged;
     struct wl_list link;
     struct sh_server *server;
-    struct wlr_xdg_toplevel *xdg_toplevel;
+    struct wlr_xdg_toplevel *xdg_toplevel; // NULL for X11 windows
+#if WLR_HAS_XWAYLAND
+    struct wlr_xwayland_surface *xsurface; // NULL for xdg-shell windows
+    bool unmanaged, associated;            // unmanaged: override-redirect menus and tooltips
+    struct wl_listener x_associate, x_dissociate, x_configure, x_activate, x_geometry;
+#endif
     struct wlr_scene_tree *scene_tree;
     struct wl_listener map;
     struct wl_listener unmap;
@@ -173,6 +194,120 @@ struct sh_keyboard {
 };
 
 static void arrange_layers(struct sh_server *server);
+
+/* Window operations shared by xdg-shell and XWayland toplevels. */
+static struct wlr_surface *toplevel_surface(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        return toplevel->xsurface->surface;
+#endif
+    return toplevel->xdg_toplevel->base->surface;
+}
+static bool toplevel_mapped(struct sh_toplevel *toplevel) {
+    struct wlr_surface *surface = toplevel_surface(toplevel);
+    return toplevel->scene_tree && surface && surface->mapped;
+}
+static struct wlr_box toplevel_geometry(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        return (struct wlr_box){0, 0, toplevel->xsurface->width, toplevel->xsurface->height};
+#endif
+    return toplevel->xdg_toplevel->base->geometry;
+}
+static void toplevel_set_activated(struct sh_toplevel *toplevel, bool activated) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface) {
+        wlr_xwayland_surface_activate(toplevel->xsurface, activated);
+        if (activated)
+            wlr_xwayland_surface_restack(toplevel->xsurface, NULL, XCB_STACK_MODE_ABOVE);
+        return;
+    }
+#endif
+    wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, activated);
+}
+/* Positions the window in layout coordinates; X11 clients also learn the position. */
+static void toplevel_configure(struct sh_toplevel *toplevel, int x, int y, int width, int height) {
+    wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface) {
+        if (width > 0 && height > 0)
+            wlr_xwayland_surface_configure(toplevel->xsurface, x, y, width, height);
+        return;
+    }
+#endif
+    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
+}
+static void toplevel_set_position(struct sh_toplevel *toplevel, int x, int y) {
+    wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface && toplevel->xsurface->width > 0 && toplevel->xsurface->height > 0)
+        wlr_xwayland_surface_configure(toplevel->xsurface, x, y, toplevel->xsurface->width,
+                                       toplevel->xsurface->height);
+#endif
+}
+static void toplevel_set_states(struct sh_toplevel *toplevel, bool maximized, uint32_t tiled) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface) {
+        wlr_xwayland_surface_set_maximized(toplevel->xsurface, maximized, maximized);
+        return;
+    }
+#endif
+    wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, maximized);
+    wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, tiled);
+}
+static void toplevel_set_fullscreen_state(struct sh_toplevel *toplevel, bool fullscreen) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface) {
+        wlr_xwayland_surface_set_fullscreen(toplevel->xsurface, fullscreen);
+        return;
+    }
+#endif
+    wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, fullscreen);
+}
+/* Answers a denied client request by repeating the current state. */
+static void toplevel_refresh(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface) {
+        if (toplevel_mapped(toplevel))
+            toplevel_set_position(toplevel, toplevel->scene_tree->node.x,
+                                  toplevel->scene_tree->node.y);
+        return;
+    }
+#endif
+    if (toplevel->xdg_toplevel->base->initialized)
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+}
+static void toplevel_close(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface) {
+        wlr_xwayland_surface_close(toplevel->xsurface);
+        return;
+    }
+#endif
+    wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
+}
+static const char *toplevel_title(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        return toplevel->xsurface->title;
+#endif
+    return toplevel->xdg_toplevel->title;
+}
+static const char *toplevel_app_id(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        return toplevel->xsurface->class;
+#endif
+    return toplevel->xdg_toplevel->app_id;
+}
+static bool toplevel_accepts_keyboard(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->xsurface)
+        return wlr_xwayland_surface_icccm_input_model(toplevel->xsurface) !=
+               WLR_ICCCM_INPUT_MODEL_NONE;
+#endif
+    return true;
+}
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void create_popup(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent);
 
@@ -182,7 +317,7 @@ static void deactivate_toplevel(struct sh_server *server) {
     struct sh_toplevel *old = server->focused_toplevel;
     if (old->fullscreen)
         wlr_scene_node_reparent(&old->scene_tree->node, server->windows);
-    wlr_xdg_toplevel_set_activated(old->xdg_toplevel, false);
+    toplevel_set_activated(old, false);
     if (old->foreign)
         wlr_foreign_toplevel_handle_v1_set_activated(old->foreign, false);
     server->focused_toplevel = NULL;
@@ -204,16 +339,15 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
     wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
     wl_list_remove(&toplevel->link);
     wl_list_insert(&server->toplevels, &toplevel->link);
-    wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+    toplevel_set_activated(toplevel, true);
     if (toplevel->foreign) {
         wlr_foreign_toplevel_handle_v1_set_minimized(toplevel->foreign, false);
         wlr_foreign_toplevel_handle_v1_set_activated(toplevel->foreign, true);
     }
     struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
-    if (keyboard)
-        wlr_seat_keyboard_notify_enter(seat, toplevel->xdg_toplevel->base->surface,
-                                       keyboard->keycodes, keyboard->num_keycodes,
-                                       &keyboard->modifiers);
+    if (keyboard && toplevel_accepts_keyboard(toplevel))
+        wlr_seat_keyboard_notify_enter(seat, toplevel_surface(toplevel), keyboard->keycodes,
+                                       keyboard->num_keycodes, &keyboard->modifiers);
 }
 
 static void focus_previous(struct sh_server *server) {
@@ -310,7 +444,7 @@ static bool handle_keybinding(struct sh_server *server, uint32_t modifiers, xkb_
     case SH_CLOSE:
         if (!wl_list_empty(&server->toplevels)) {
             struct sh_toplevel *focused = wl_container_of(server->toplevels.next, focused, link);
-            wlr_xdg_toplevel_send_close(focused->xdg_toplevel);
+            toplevel_close(focused);
         }
         break;
     default:
@@ -487,8 +621,8 @@ static void reset_cursor_mode(struct sh_server *server) {
 
 static void process_cursor_move(struct sh_server *server) {
     struct sh_toplevel *toplevel = server->grabbed_toplevel;
-    wlr_scene_node_set_position(&toplevel->scene_tree->node, server->cursor->x - server->grab_x,
-                                server->cursor->y - server->grab_y);
+    toplevel_set_position(toplevel, server->cursor->x - server->grab_x,
+                          server->cursor->y - server->grab_y);
 }
 
 static void process_cursor_resize(struct sh_server *server) {
@@ -523,13 +657,9 @@ static void process_cursor_resize(struct sh_server *server) {
         }
     }
 
-    struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
-    wlr_scene_node_set_position(&toplevel->scene_tree->node, new_left - geo_box->x,
-                                new_top - geo_box->y);
-
-    int new_width = new_right - new_left;
-    int new_height = new_bottom - new_top;
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, new_width, new_height);
+    struct wlr_box geo_box = toplevel_geometry(toplevel);
+    toplevel_configure(toplevel, new_left - geo_box.x, new_top - geo_box.y, new_right - new_left,
+                       new_bottom - new_top);
 }
 
 static void process_cursor_motion(struct sh_server *server, uint32_t time) {
@@ -737,23 +867,21 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 /* Preserve the original floating rectangle across repeated snap operations. */
 static void place_toplevel(struct sh_toplevel *toplevel, enum sh_action action,
                            struct sh_rect target) {
-    struct wlr_box *geometry = &toplevel->xdg_toplevel->base->geometry;
+    struct wlr_box geometry = toplevel_geometry(toplevel);
     if (!toplevel->arranged) {
         toplevel->restore_box =
             (struct wlr_box){toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
-                             geometry->width, geometry->height};
+                             geometry.width, geometry.height};
     }
     toplevel->arranged = true;
     toplevel->arrangement = action;
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, action == SH_MAXIMIZE);
-    wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, action == SH_MAXIMIZE);
-    wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, action == SH_MAXIMIZE
-                                                           ? 0
-                                                           : WLR_EDGE_TOP | WLR_EDGE_BOTTOM |
-                                                                 WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
-    wlr_scene_node_set_position(&toplevel->scene_tree->node, target.x, target.y);
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, target.width, target.height);
+    toplevel_set_states(toplevel, action == SH_MAXIMIZE,
+                        action == SH_MAXIMIZE
+                            ? 0
+                            : WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
+    toplevel_configure(toplevel, target.x, target.y, target.width, target.height);
 }
 
 static void restore_toplevel(struct sh_toplevel *toplevel) {
@@ -762,12 +890,9 @@ static void restore_toplevel(struct sh_toplevel *toplevel) {
     toplevel->arranged = false;
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
-    wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
-    wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
-    wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->restore_box.x,
-                                toplevel->restore_box.y);
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->restore_box.width,
-                              toplevel->restore_box.height);
+    toplevel_set_states(toplevel, false, 0);
+    toplevel_configure(toplevel, toplevel->restore_box.x, toplevel->restore_box.y,
+                       toplevel->restore_box.width, toplevel->restore_box.height);
 }
 
 static struct wlr_output *toplevel_output(struct sh_toplevel *toplevel) {
@@ -848,7 +973,7 @@ static void foreign_activate(struct wl_listener *listener, void *data) {
 }
 static void foreign_close(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_close);
-    wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
+    toplevel_close(toplevel);
 }
 static void foreign_maximize(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_maximize);
@@ -879,22 +1004,20 @@ static void foreign_minimize(struct wl_listener *listener, void *data) {
 }
 static void toplevel_request_minimize(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_minimize);
-    if (toplevel->xdg_toplevel->base->surface->mapped)
+    if (toplevel_mapped(toplevel))
         minimize_toplevel(toplevel);
 }
 static void toplevel_title_changed(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, title_changed);
+    const char *title = toplevel_title(toplevel);
     if (toplevel->foreign)
-        wlr_foreign_toplevel_handle_v1_set_title(
-            toplevel->foreign,
-            toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "Untitled");
+        wlr_foreign_toplevel_handle_v1_set_title(toplevel->foreign, title ? title : "Untitled");
 }
 static void toplevel_app_id_changed(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, app_id_changed);
+    const char *app_id = toplevel_app_id(toplevel);
     if (toplevel->foreign)
-        wlr_foreign_toplevel_handle_v1_set_app_id(
-            toplevel->foreign,
-            toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "");
+        wlr_foreign_toplevel_handle_v1_set_app_id(toplevel->foreign, app_id ? app_id : "");
 }
 static void publish_toplevel(struct sh_toplevel *toplevel) {
     toplevel->foreign = wlr_foreign_toplevel_handle_v1_create(toplevel->server->foreign_manager);
@@ -1043,22 +1166,31 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
     wl_signal_add(&surface->events.new_popup, &layer->new_popup);
 }
 
-static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *data);
+static void maximize_toplevel(struct sh_toplevel *toplevel, bool maximized) {
+    if (!maximized) {
+        restore_toplevel(toplevel);
+        return;
+    }
+    struct wlr_output *output = toplevel_output(toplevel);
+    if (!output)
+        return;
+    struct wlr_box box;
+    usable_area(toplevel->server, output, &box);
+    place_toplevel(toplevel, SH_MAXIMIZE, (struct sh_rect){box.x, box.y, box.width, box.height});
+}
 
-static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
-    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, map);
-
+static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool maximized) {
     int offset = 40 + 32 * (wl_list_length(&toplevel->server->toplevels) % 8);
     int x = offset, y = offset;
+    bool resize = false;
+    struct wlr_box geometry = toplevel_geometry(toplevel);
+    int width = geometry.width, height = geometry.height;
     struct wlr_output *output = toplevel_output(toplevel);
     if (output) {
         struct wlr_box area;
         usable_area(toplevel->server, output, &area);
         // Keep newly opened applications reachable inside a small nested output.
         int margin = area.width < 80 || area.height < 80 ? 0 : 40;
-        int width = toplevel->xdg_toplevel->base->geometry.width;
-        int height = toplevel->xdg_toplevel->base->geometry.height;
-        bool resize = false;
         if (width > area.width - 2 * margin) {
             width = area.width - 2 * margin;
             resize = true;
@@ -1067,25 +1199,30 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
             height = area.height - 2 * margin;
             resize = true;
         }
-        if (resize && width > 0 && height > 0)
-            wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
         x = area.x + (offset + width <= area.width ? offset : margin);
         y = area.y + (offset + height <= area.height ? offset : margin);
     }
-    wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
+    if (resize && width > 0 && height > 0)
+        toplevel_configure(toplevel, x, y, width, height);
+    else
+        toplevel_set_position(toplevel, x, y);
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
 
     publish_toplevel(toplevel);
     focus_toplevel(toplevel);
-    if (toplevel->xdg_toplevel->requested.fullscreen)
+    if (fullscreen)
         set_fullscreen(toplevel, true);
-    else if (toplevel->xdg_toplevel->requested.maximized)
-        xdg_toplevel_request_maximize(&toplevel->request_maximize, NULL);
+    else if (maximized)
+        maximize_toplevel(toplevel, true);
 }
 
-static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
-    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+    map_toplevel(toplevel, toplevel->xdg_toplevel->requested.fullscreen,
+                 toplevel->xdg_toplevel->requested.maximized);
+}
 
+static void unmap_toplevel(struct sh_toplevel *toplevel) {
     if (toplevel == toplevel->server->grabbed_toplevel) {
         reset_cursor_mode(toplevel->server);
     }
@@ -1098,6 +1235,11 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->link);
     if (was_focused)
         focus_previous(toplevel->server);
+}
+
+static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+    unmap_toplevel(toplevel);
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
@@ -1135,8 +1277,7 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
     toplevel->arranged = false;
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
-    wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
-    wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, 0);
+    toplevel_set_states(toplevel, false, 0);
     server->grabbed_toplevel = toplevel;
     server->cursor_mode = mode;
 
@@ -1144,16 +1285,16 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
         server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
         server->grab_y = server->cursor->y - toplevel->scene_tree->node.y;
     } else {
-        struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
+        struct wlr_box geo_box = toplevel_geometry(toplevel);
 
-        double border_x = (toplevel->scene_tree->node.x + geo_box->x) +
-                          ((edges & WLR_EDGE_RIGHT) ? geo_box->width : 0);
-        double border_y = (toplevel->scene_tree->node.y + geo_box->y) +
-                          ((edges & WLR_EDGE_BOTTOM) ? geo_box->height : 0);
+        double border_x = (toplevel->scene_tree->node.x + geo_box.x) +
+                          ((edges & WLR_EDGE_RIGHT) ? geo_box.width : 0);
+        double border_y = (toplevel->scene_tree->node.y + geo_box.y) +
+                          ((edges & WLR_EDGE_BOTTOM) ? geo_box.height : 0);
         server->grab_x = server->cursor->x - border_x;
         server->grab_y = server->cursor->y - border_y;
 
-        server->grab_geobox = *geo_box;
+        server->grab_geobox = geo_box;
         server->grab_geobox.x += toplevel->scene_tree->node.x;
         server->grab_geobox.y += toplevel->scene_tree->node.y;
 
@@ -1181,20 +1322,8 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener, void *da
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_maximize);
     if (!toplevel->xdg_toplevel->base->initialized)
         return;
-    if (toplevel->fullscreen) {
-        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
-        return;
-    }
-    if (toplevel->xdg_toplevel->requested.maximized) {
-        struct wlr_output *output = toplevel_output(toplevel);
-        if (output) {
-            struct wlr_box box;
-            usable_area(toplevel->server, output, &box);
-            place_toplevel(toplevel, SH_MAXIMIZE,
-                           (struct sh_rect){box.x, box.y, box.width, box.height});
-        }
-    } else
-        restore_toplevel(toplevel);
+    if (!toplevel->fullscreen)
+        maximize_toplevel(toplevel, toplevel->xdg_toplevel->requested.maximized);
     wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 }
 
@@ -1205,8 +1334,7 @@ static void fit_fullscreen(struct sh_toplevel *toplevel) {
         return;
     struct wlr_box box;
     wlr_output_layout_get_box(toplevel->server->output_layout, output, &box);
-    wlr_scene_node_set_position(&toplevel->scene_tree->node, box.x, box.y);
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, box.width, box.height);
+    toplevel_configure(toplevel, box.x, box.y, box.width, box.height);
 }
 
 static void refit_fullscreen(struct sh_server *server) {
@@ -1219,29 +1347,26 @@ static void refit_fullscreen(struct sh_server *server) {
 
 static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen) {
     struct sh_server *server = toplevel->server;
-    if (!toplevel->xdg_toplevel->base->surface->mapped || toplevel->fullscreen == fullscreen) {
-        if (toplevel->xdg_toplevel->base->initialized)
-            wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    if (!toplevel_mapped(toplevel) || toplevel->fullscreen == fullscreen) {
+        toplevel_refresh(toplevel);
         return;
     }
     if (server->grabbed_toplevel == toplevel)
         reset_cursor_mode(server);
-    struct wlr_box *geometry = &toplevel->xdg_toplevel->base->geometry;
+    struct wlr_box geometry = toplevel_geometry(toplevel);
     if (fullscreen)
         toplevel->fullscreen_restore =
             (struct wlr_box){toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
-                             geometry->width, geometry->height};
+                             geometry.width, geometry.height};
     toplevel->fullscreen = fullscreen;
-    wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, fullscreen);
+    toplevel_set_fullscreen_state(toplevel, fullscreen);
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_fullscreen(toplevel->foreign, fullscreen);
     if (fullscreen) {
         fit_fullscreen(toplevel);
     } else {
-        wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->fullscreen_restore.x,
-                                    toplevel->fullscreen_restore.y);
-        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, toplevel->fullscreen_restore.width,
-                                  toplevel->fullscreen_restore.height);
+        toplevel_configure(toplevel, toplevel->fullscreen_restore.x, toplevel->fullscreen_restore.y,
+                           toplevel->fullscreen_restore.width, toplevel->fullscreen_restore.height);
         wlr_scene_node_reparent(&toplevel->scene_tree->node, server->windows);
         // The usable area may have changed while this window covered the output.
         struct wlr_output *output = toplevel_output(toplevel);
@@ -1294,6 +1419,334 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
     wl_signal_add(&xdg_toplevel->events.request_maximize, &toplevel->request_maximize);
     toplevel->request_fullscreen.notify = xdg_toplevel_request_fullscreen;
     wl_signal_add(&xdg_toplevel->events.request_fullscreen, &toplevel->request_fullscreen);
+}
+
+#if WLR_HAS_XWAYLAND
+/* X11 windows: managed ones behave like xdg toplevels; override-redirect ones
+ * (menus, tooltips, drag icons) are drawn where they ask and never take part in focus order. */
+static void xwayland_map(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+    struct wlr_xwayland_surface *xsurface = toplevel->xsurface;
+    struct sh_server *server = toplevel->server;
+    toplevel->unmanaged = xsurface->override_redirect;
+    toplevel->scene_tree =
+        wlr_scene_tree_create(toplevel->unmanaged ? server->unmanaged : server->windows);
+    if (!toplevel->scene_tree ||
+        !wlr_scene_subsurface_tree_create(toplevel->scene_tree, xsurface->surface)) {
+        wlr_log(WLR_ERROR, "Cannot create scene for X11 window");
+        if (toplevel->scene_tree)
+            wlr_scene_node_destroy(&toplevel->scene_tree->node);
+        toplevel->scene_tree = NULL;
+        return;
+    }
+    if (toplevel->unmanaged) {
+        wlr_scene_node_set_position(&toplevel->scene_tree->node, xsurface->x, xsurface->y);
+        struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
+        if (keyboard && wlr_xwayland_surface_override_redirect_wants_focus(xsurface))
+            wlr_seat_keyboard_notify_enter(server->seat, xsurface->surface, keyboard->keycodes,
+                                           keyboard->num_keycodes, &keyboard->modifiers);
+        return;
+    }
+    toplevel->scene_tree->node.data = &toplevel->node;
+    map_toplevel(toplevel, xsurface->fullscreen,
+                 xsurface->maximized_horz && xsurface->maximized_vert);
+}
+
+static void xwayland_unmap(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+    struct sh_server *server = toplevel->server;
+    if (!toplevel->scene_tree)
+        return;
+    if (toplevel->unmanaged) {
+        // Return the keyboard from a closed X11 menu to the focused window.
+        if (server->seat->keyboard_state.focused_surface == toplevel->xsurface->surface) {
+            if (server->focused_toplevel)
+                focus_toplevel(server->focused_toplevel);
+            else
+                wlr_seat_keyboard_clear_focus(server->seat);
+        }
+    } else {
+        unmap_toplevel(toplevel);
+    }
+    wlr_scene_node_destroy(&toplevel->scene_tree->node);
+    toplevel->scene_tree = NULL;
+}
+
+static void xwayland_associate(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_associate);
+    toplevel->associated = true;
+    toplevel->map.notify = xwayland_map;
+    wl_signal_add(&toplevel->xsurface->surface->events.map, &toplevel->map);
+    toplevel->unmap.notify = xwayland_unmap;
+    wl_signal_add(&toplevel->xsurface->surface->events.unmap, &toplevel->unmap);
+}
+
+static void xwayland_dissociate(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_dissociate);
+    toplevel->associated = false;
+    wl_list_remove(&toplevel->map.link);
+    wl_list_remove(&toplevel->unmap.link);
+}
+
+static void xwayland_destroy(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, destroy);
+    if (toplevel->associated) {
+        wl_list_remove(&toplevel->map.link);
+        wl_list_remove(&toplevel->unmap.link);
+    }
+    wl_list_remove(&toplevel->x_associate.link);
+    wl_list_remove(&toplevel->x_dissociate.link);
+    wl_list_remove(&toplevel->x_configure.link);
+    wl_list_remove(&toplevel->x_activate.link);
+    wl_list_remove(&toplevel->x_geometry.link);
+    wl_list_remove(&toplevel->destroy.link);
+    wl_list_remove(&toplevel->request_move.link);
+    wl_list_remove(&toplevel->request_resize.link);
+    wl_list_remove(&toplevel->request_maximize.link);
+    wl_list_remove(&toplevel->request_fullscreen.link);
+    wl_list_remove(&toplevel->request_minimize.link);
+    wl_list_remove(&toplevel->title_changed.link);
+    wl_list_remove(&toplevel->app_id_changed.link);
+    free(toplevel);
+}
+
+static bool xwayland_managed(struct sh_toplevel *toplevel) {
+    return toplevel_mapped(toplevel) && !toplevel->unmanaged;
+}
+
+static void xwayland_request_configure(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_configure);
+    struct wlr_xwayland_surface_configure_event *event = data;
+    if (!xwayland_managed(toplevel)) {
+        wlr_xwayland_surface_configure(toplevel->xsurface, event->x, event->y, event->width,
+                                       event->height);
+        if (toplevel->scene_tree)
+            wlr_scene_node_set_position(&toplevel->scene_tree->node, event->x, event->y);
+        return;
+    }
+    // Placement belongs to the compositor; floating windows may still choose their size.
+    if (toplevel->fullscreen || toplevel->arranged) {
+        toplevel_refresh(toplevel);
+        return;
+    }
+    toplevel_configure(toplevel, toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
+                       event->width, event->height);
+}
+
+static void xwayland_set_geometry(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_geometry);
+    if (toplevel->unmanaged && toplevel->scene_tree)
+        wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->xsurface->x,
+                                    toplevel->xsurface->y);
+}
+
+static void xwayland_request_activate(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_activate);
+    if (xwayland_managed(toplevel))
+        focus_toplevel(toplevel);
+}
+
+/* X11 grab requests carry no serial; accept them only while a button is held. */
+static void xwayland_request_move(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_move);
+    if (xwayland_managed(toplevel) && toplevel->server->seat->pointer_state.button_count > 0)
+        begin_interactive(toplevel, SH_CURSOR_MOVE, 0);
+}
+
+static void xwayland_request_resize(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_resize);
+    struct wlr_xwayland_resize_event *event = data;
+    if (xwayland_managed(toplevel) && toplevel->server->seat->pointer_state.button_count > 0)
+        begin_interactive(toplevel, SH_CURSOR_RESIZE, event->edges);
+}
+
+static void xwayland_request_maximize(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_maximize);
+    if (!xwayland_managed(toplevel) || toplevel->fullscreen)
+        return;
+    maximize_toplevel(toplevel,
+                      toplevel->xsurface->maximized_horz || toplevel->xsurface->maximized_vert);
+}
+
+static void xwayland_request_fullscreen(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_fullscreen);
+    if (xwayland_managed(toplevel))
+        set_fullscreen(toplevel, toplevel->xsurface->fullscreen);
+}
+
+static void xwayland_request_minimize(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, request_minimize);
+    struct wlr_xwayland_minimize_event *event = data;
+    if (!xwayland_managed(toplevel))
+        return;
+    if (event->minimize)
+        minimize_toplevel(toplevel);
+    else
+        focus_toplevel(toplevel);
+}
+
+static void server_new_xwayland_surface(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_xwayland_surface);
+    struct wlr_xwayland_surface *xsurface = data;
+    struct sh_toplevel *toplevel = calloc(1, sizeof(*toplevel));
+    if (!toplevel) {
+        wlr_xwayland_surface_close(xsurface);
+        return;
+    }
+    toplevel->server = server;
+    toplevel->xsurface = xsurface;
+    toplevel->node = (struct sh_node){SH_NODE_TOPLEVEL, toplevel};
+    xsurface->data = toplevel;
+    struct {
+        struct wl_listener *listener;
+        struct wl_signal *signal;
+        wl_notify_func_t notify;
+    } listeners[] = {
+        {&toplevel->x_associate, &xsurface->events.associate, xwayland_associate},
+        {&toplevel->x_dissociate, &xsurface->events.dissociate, xwayland_dissociate},
+        {&toplevel->destroy, &xsurface->events.destroy, xwayland_destroy},
+        {&toplevel->x_configure, &xsurface->events.request_configure, xwayland_request_configure},
+        {&toplevel->x_activate, &xsurface->events.request_activate, xwayland_request_activate},
+        {&toplevel->x_geometry, &xsurface->events.set_geometry, xwayland_set_geometry},
+        {&toplevel->request_move, &xsurface->events.request_move, xwayland_request_move},
+        {&toplevel->request_resize, &xsurface->events.request_resize, xwayland_request_resize},
+        {&toplevel->request_maximize, &xsurface->events.request_maximize,
+         xwayland_request_maximize},
+        {&toplevel->request_fullscreen, &xsurface->events.request_fullscreen,
+         xwayland_request_fullscreen},
+        {&toplevel->request_minimize, &xsurface->events.request_minimize,
+         xwayland_request_minimize},
+        {&toplevel->title_changed, &xsurface->events.set_title, toplevel_title_changed},
+        {&toplevel->app_id_changed, &xsurface->events.set_class, toplevel_app_id_changed},
+    };
+    for (size_t i = 0; i < sizeof(listeners) / sizeof(listeners[0]); ++i) {
+        listeners[i].listener->notify = listeners[i].notify;
+        wl_signal_add(listeners[i].signal, listeners[i].listener);
+    }
+}
+
+static void run_startup(struct sh_server *server);
+
+/* wlroots' XWM can strand X events: xcb_flush() in its write-only wakeup reads
+ * pending input into xcb's queue, and nothing processes that queue until more
+ * data arrives. A periodic client message from a separate connection, sent only
+ * to the XWM's own window, makes its socket readable so the handler drains the queue. */
+enum { XWM_WAKE_INTERVAL_MS = 250 };
+
+static void close_xwm_waker(struct sh_server *server) {
+    if (server->waker_timer)
+        wl_event_source_remove(server->waker_timer);
+    if (server->waker_input)
+        wl_event_source_remove(server->waker_input);
+    if (server->xwm_waker)
+        xcb_disconnect(server->xwm_waker);
+    server->waker_timer = server->waker_input = NULL;
+    server->xwm_waker = NULL;
+}
+
+static int xwm_waker_tick(void *data) {
+    struct sh_server *server = data;
+    xcb_client_message_event_t message = {.response_type = XCB_CLIENT_MESSAGE,
+                                          .format = 32,
+                                          .window = server->xwm_window,
+                                          .type = server->waker_atom};
+    // An empty event mask delivers the message only to the window's creator: the XWM.
+    xcb_send_event(server->xwm_waker, false, server->xwm_window, XCB_EVENT_MASK_NO_EVENT,
+                   (const char *)&message);
+    xcb_flush(server->xwm_waker);
+    wl_event_source_timer_update(server->waker_timer, XWM_WAKE_INTERVAL_MS);
+    return 0;
+}
+
+static int xwm_waker_input(int fd, uint32_t mask, void *data) {
+    struct sh_server *server = data;
+    xcb_generic_event_t *event;
+    while ((event = xcb_poll_for_event(server->xwm_waker)))
+        free(event); // Only errors can arrive; no events are selected.
+    if ((mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) || xcb_connection_has_error(server->xwm_waker))
+        close_xwm_waker(server);
+    return 0;
+}
+
+static void open_xwm_waker(struct sh_server *server) {
+    close_xwm_waker(server);
+    server->xwm_waker = xcb_connect(server->xwayland->display_name, NULL);
+    if (xcb_connection_has_error(server->xwm_waker)) {
+        xcb_disconnect(server->xwm_waker);
+        server->xwm_waker = NULL;
+        wlr_log(WLR_ERROR, "Cannot connect XWM waker; X11 windows may appear late");
+        return;
+    }
+    xcb_atom_t atoms[2] = {XCB_ATOM_NONE, XCB_ATOM_NONE};
+    const char *names[2] = {"_SHAODE_XWM_WAKE", "_NET_SUPPORTING_WM_CHECK"};
+    for (int i = 0; i < 2; ++i) {
+        xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(
+            server->xwm_waker,
+            xcb_intern_atom(server->xwm_waker, false, strlen(names[i]), names[i]), NULL);
+        if (reply)
+            atoms[i] = reply->atom;
+        free(reply);
+    }
+    server->waker_atom = atoms[0];
+    server->xwm_window = XCB_WINDOW_NONE;
+    xcb_screen_t *screen = xcb_setup_roots_iterator(xcb_get_setup(server->xwm_waker)).data;
+    xcb_get_property_reply_t *check = xcb_get_property_reply(
+        server->xwm_waker,
+        xcb_get_property(server->xwm_waker, false, screen->root, atoms[1], XCB_ATOM_WINDOW, 0, 1),
+        NULL);
+    if (check && xcb_get_property_value_length(check) == sizeof(xcb_window_t))
+        server->xwm_window = *(xcb_window_t *)xcb_get_property_value(check);
+    free(check);
+    struct wl_event_loop *loop = wl_display_get_event_loop(server->wl_display);
+    server->waker_input = wl_event_loop_add_fd(loop, xcb_get_file_descriptor(server->xwm_waker),
+                                               WL_EVENT_READABLE, xwm_waker_input, server);
+    server->waker_timer = wl_event_loop_add_timer(loop, xwm_waker_tick, server);
+    if (server->waker_atom == XCB_ATOM_NONE || server->xwm_window == XCB_WINDOW_NONE ||
+        !server->waker_input || !server->waker_timer) {
+        wlr_log(WLR_ERROR, "Cannot set up XWM waker; X11 windows may appear late");
+        close_xwm_waker(server);
+        return;
+    }
+    wl_event_source_timer_update(server->waker_timer, XWM_WAKE_INTERVAL_MS);
+}
+
+static void xwayland_ready(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, xwayland_ready);
+    wlr_log(WLR_INFO, "XWayland ready on DISPLAY=%s", server->xwayland->display_name);
+    wlr_xwayland_set_seat(server->xwayland, server->seat);
+    open_xwm_waker(server);
+    if (wlr_xcursor_manager_load(server->cursor_mgr, 1)) {
+        struct wlr_xcursor *xcursor =
+            wlr_xcursor_manager_get_xcursor(server->cursor_mgr, "default", 1);
+        if (xcursor) {
+            struct wlr_xcursor_image *image = xcursor->images[0];
+            wlr_xwayland_set_cursor(server->xwayland, wlr_xcursor_image_get_buffer(image),
+                                    image->hotspot_x, image->hotspot_y);
+        }
+    }
+    run_startup(server);
+}
+
+static int startup_timeout(void *data) {
+    wlr_log(WLR_ERROR, "XWayland did not become ready; starting applications anyway");
+    run_startup(data);
+    return 0;
+}
+#endif
+
+/* Launch the shell and startup commands once X11 clients can be managed: the
+ * window manager ignores windows created before it attaches to Xwayland. */
+static void run_startup(struct sh_server *server) {
+    if (server->started)
+        return;
+    server->started = true;
+#if WLR_HAS_XWAYLAND
+    if (server->startup_timeout) {
+        wl_event_source_remove(server->startup_timeout);
+        server->startup_timeout = NULL;
+    }
+#endif
+    server->callbacks->startup(server->callbacks->userdata);
 }
 
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
@@ -1408,7 +1861,8 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
         return 1;
     }
 
-    wlr_compositor_create(server.wl_display, 5, server.renderer);
+    struct wlr_compositor *compositor =
+        wlr_compositor_create(server.wl_display, 5, server.renderer);
     wlr_subcompositor_create(server.wl_display);
     wlr_data_device_manager_create(server.wl_display);
 
@@ -1425,6 +1879,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     server.windows = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[2] = wlr_scene_tree_create(&server.scene->tree);
     server.fullscreen = wlr_scene_tree_create(&server.scene->tree);
+    server.unmanaged = wlr_scene_tree_create(&server.scene->tree);
     server.layer_trees[3] = wlr_scene_tree_create(&server.scene->tree);
     wl_list_init(&server.layers);
     server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
@@ -1484,8 +1939,32 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     setenv("XDG_CURRENT_DESKTOP", "shaoDe", true);
     setenv("XDG_SESSION_TYPE", "wayland", true);
     unsetenv("DISPLAY");
+#if WLR_HAS_XWAYLAND
+    // Started eagerly: lazy startup races the first client against the window manager.
+    if (callbacks->settings(callbacks->userdata)->xwayland) {
+        server.xwayland = wlr_xwayland_create(server.wl_display, compositor, false);
+        if (server.xwayland) {
+            server.xwayland_ready.notify = xwayland_ready;
+            wl_signal_add(&server.xwayland->events.ready, &server.xwayland_ready);
+            server.new_xwayland_surface.notify = server_new_xwayland_surface;
+            wl_signal_add(&server.xwayland->events.new_surface, &server.new_xwayland_surface);
+            setenv("DISPLAY", server.xwayland->display_name, true);
+            wlr_log(WLR_INFO, "Starting XWayland on DISPLAY=%s", server.xwayland->display_name);
+            server.startup_timeout = wl_event_loop_add_timer(loop, startup_timeout, &server);
+            if (server.startup_timeout)
+                wl_event_source_timer_update(server.startup_timeout, 10000);
+        } else {
+            wlr_log(WLR_ERROR, "Cannot create XWayland; X11 applications are unavailable");
+        }
+    }
+#else
+    (void)compositor;
+#endif
     server.running = true;
-    callbacks->startup(callbacks->userdata);
+#if WLR_HAS_XWAYLAND
+    if (!server.xwayland)
+#endif
+        run_startup(&server);
 
     wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s", socket);
     wl_display_run(server.wl_display);
@@ -1495,6 +1974,16 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_event_source_remove(sighup);
     wl_event_source_remove(sigchld);
 
+#if WLR_HAS_XWAYLAND
+    if (server.startup_timeout)
+        wl_event_source_remove(server.startup_timeout);
+    close_xwm_waker(&server);
+    if (server.xwayland) {
+        wl_list_remove(&server.xwayland_ready.link);
+        wl_list_remove(&server.new_xwayland_surface.link);
+        wlr_xwayland_destroy(server.xwayland);
+    }
+#endif
     wl_display_destroy_clients(server.wl_display);
 
     wl_list_remove(&server.new_xdg_toplevel.link);

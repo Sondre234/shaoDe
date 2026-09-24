@@ -75,8 +75,14 @@ tiling; snapping is keyboard-driven, without edge-drag previews. Decorations
 come from clients. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window
 placement during interactive resize is immediate, without waiting for the
-client's next buffer. There are no workspaces, XWayland,
-lock screen, portal integration, or support for using this as a daily desktop.
+client's next buffer. There are no workspaces, lock screen, portal integration,
+or support for using this as a daily desktop.
+
+X11 applications run through XWayland when wlroots is built with X support and
+`Xwayland` is installed. It starts with the compositor (Lua `xwayland = false`
+disables it; changing it needs a restart), and the shell and startup commands
+launch once it is ready, so they inherit `DISPLAY`. X11 windows take part in
+focus, the taskbar, snapping, maximize, and fullscreen like Wayland windows.
 Lua currently configures the exposed settings/actions; custom layout functions
 and shell widgets are later work.
 
@@ -134,7 +140,7 @@ remaining limitations.
    and icons. Preview rendering is verified; live shell verification is next.
 4. Persistent per-workspace tiling, drag-to-edge previews, window rules, and Lua
    extension APIs shared by mouse controls and shortcuts.
-5. Session integration: multi-monitor policy, XWayland, notifications, tray,
+5. Session integration: multi-monitor policy, notifications, tray,
    portals/screen sharing, locking, power and audio controls.
 
 The compositor targets wlroots 0.20 specifically, because its API changes

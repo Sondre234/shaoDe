@@ -21,7 +21,9 @@ between release series. Relevant Gentoo packages are:
 - Python 3 for the automated tests; a Wayland terminal for interactive testing
 
 Standalone operation requires wlroots built with `drm`, `libinput`, and `session`
-USE flags. A GLES2-capable graphics stack is needed. The upstream Gentoo ebuild
+USE flags. X11 applications additionally need wlroots with the `X` USE flag and
+`x11-base/xwayland`; shaoDe then links `x11-libs/libxcb` and enables XWayland
+automatically. A GLES2-capable graphics stack is needed. The upstream Gentoo ebuild
 lists the backend dependencies and flags:
 [wlroots 0.20.2 ebuild](https://github.com/gentoo/gentoo/blob/master/gui-libs/wlroots/wlroots-0.20.2.ebuild).
 Check the package version/keywords available in your own tree before installing.
@@ -100,7 +102,7 @@ Ctrl+Alt+F1 through F12 request VT switching through wlroots/libseat; the Lua qu
 binding remains Alt+Shift+Escape. Do not launch the compositor with sudo.
 
 This backend path is compiled but has not been exercised on physical hardware.
-Keep another TTY available while testing. Session locking, portals, XWayland,
+Keep another TTY available while testing. Session locking, portals,
 and full multi-monitor management are not implemented yet; this is not ready to
 replace a secured daily session.
 

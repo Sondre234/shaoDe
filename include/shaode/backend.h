@@ -34,6 +34,7 @@ struct sh_settings {
     int gap;
     char keyboard_layout[128];
     char keyboard_options[128];
+    bool xwayland; /* read at startup; changing it needs a restart */
 };
 
 struct sh_callbacks {

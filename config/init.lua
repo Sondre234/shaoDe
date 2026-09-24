@@ -9,6 +9,7 @@ return {
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
     layout = { gap = 8 },
+    xwayland = true, -- run X11 applications; Xwayland starts on first use (restart to change)
     shell = {
         enabled = true,
         panel_height = 52,
