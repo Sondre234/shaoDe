@@ -72,6 +72,9 @@ grep -q '^en_US.UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >>/etc/locale
 locale-gen --quiet
 eselect locale set en_US.utf8
 echo 'hostname="shaode-gentoo"' >/etc/conf.d/hostname
+# Console keymap follows the host's; shaoDe's own layout is set in init.lua.
+[[ -z $VM_KEYMAP || $VM_KEYMAP == n/a ]] ||
+    sed -i "s/^keymap=.*/keymap=\"$VM_KEYMAP\"/" /etc/conf.d/keymaps
 
 # Boot: EFI system partition, GRUB (removable path, no NVRAM), dracut
 blkid -p "$ESP_DEV" | grep -q vfat || mkfs.vfat -F 32 -n ESP "$ESP_DEV"
