@@ -1,9 +1,9 @@
 # Running shaoDe on Gentoo
 
 shaoDe is being developed for a personal Gentoo desktop. It currently has a
-working nested compositor and an experimental standalone backend. The actual
-Gentoo build and physical DRM/input session have not yet been tested; development
-verification is on Arch. There is no dependency on systemd in shaoDe itself.
+working nested compositor and an experimental standalone backend. The physical
+DRM/input session has run on an Arch laptop; the actual Gentoo build has only been
+tested in the VM below. There is no dependency on systemd in shaoDe itself.
 For a reproducible Gentoo test machine, see the QEMU/KVM VM scripts in
 [tools/gentoo-vm](../tools/gentoo-vm/README.md).
 
@@ -107,7 +107,17 @@ or `WAYLAND_DISPLAY` set is rejected to avoid accidental session takeover.
 Ctrl+Alt+F1 through F12 request VT switching through wlroots/libseat; the Lua quit
 binding remains Alt+Shift+Escape. Do not launch the compositor with sudo.
 
-This backend path is compiled but has not been exercised on physical hardware.
+Switching to another VT pauses the session; wlroots removes every output until you
+return, and shaoDe, the shell, and open windows carry on. On laptops whose F-keys
+default to media functions, hold Fn for the VT keys (`sudo chvt N` also works).
+
+For a first run on new hardware, `tools/tty-session-test.sh` runs the build tree's
+`--session` with a log at `~/.local/state/shaode/tty-test-latest.log` and quits
+after `SHAODE_TEST_LIMIT` seconds (default 300) in case input does not work.
+`SHAODE_TEST_TERM` picks the terminal it opens (default foot).
+
+The backend has run on one laptop (amdgpu, single eDP panel, touchpad). NVIDIA,
+hybrid-GPU outputs, and multiple monitors are untested.
 Keep another TTY available while testing. Portals and full multi-monitor
 management are not implemented yet; this is not ready to
 replace a secured daily session.

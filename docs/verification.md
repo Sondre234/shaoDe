@@ -85,3 +85,21 @@ branch has not been compiled or run. Mouse interaction with the live taskbar,
 output lifecycle, panel reservation through Qt, and shell startup/reload need
 integration testing.
 The lower-level compositor protocols are tested separately as described above.
+
+## First physical session
+
+On 2026-09-24 `--session` ran from tty3 on an Arch laptop (AMD Vega 8 through
+amdgpu, 1920×1080 eDP panel, touchpad; an NVIDIA GTX 1650 was present but
+unused). libseat opened the seat through logind. The user checked rendering,
+touchpad and keyboard input, launching and moving/resizing windows, the shell's
+panel and launcher, and an XWayland application (Discord).
+
+Switching to another VT made shaoDe exit. wlroots 0.20 destroys every DRM output
+when the session pauses and recreates them on resume; the compositor took the last
+output's removal to mean its nested window had closed, and the shell quit when its
+last view closed. After the fix, repeated `chvt` round trips kept the compositor,
+shell, and clients alive, and the panel returned on the recreated output. Output
+removal logs `Failed to disable CRTC` while the DRM FD is paused; it is harmless.
+
+Still untested on hardware: NVIDIA, multiple monitors, hotplug, suspend/resume,
+lid close, and brightness/volume keys.

@@ -34,7 +34,8 @@ ctest --test-dir build --output-on-failure
 The compositor opens a nested window in the current Wayland session.
 It selects only the Wayland backend; `--headless` selects the headless backend
 for testing. The separate `--session` option selects DRM/libinput from a TTY; that physical
-backend is experimental and has not yet been hardware-tested. Session-file
+backend is experimental: it has run on one laptop (AMD graphics, single built-in
+screen), but not yet on NVIDIA or with multiple monitors. Session-file
 installation is opt-in with `SHAODE_INSTALL_SESSION=ON`.
 Applications launched through `--exec`, startup entries, or bindings inherit
 the nested Wayland socket. Commands after `--exec` consume all remaining
