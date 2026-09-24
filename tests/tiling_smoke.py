@@ -6,22 +6,11 @@ import socket
 import subprocess
 import sys
 import tempfile
-import time
+
+import harness
 
 compositor, probe, example = (str(Path(p).resolve()) for p in sys.argv[1:4])
 GAP = 8
-
-
-def wait_for(predicate, processes, message):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        for process in processes:
-            assert process.poll() is None, f"process exited ({process.returncode}): {message}"
-        if predicate():
-            return
-        time.sleep(.02)
-    raise AssertionError(f"timed out: {message}; windows: {windows()}")
-
 
 with tempfile.TemporaryDirectory(prefix="shaode-tiling-test-") as directory:
     root = Path(directory)
@@ -42,6 +31,9 @@ with tempfile.TemporaryDirectory(prefix="shaode-tiling-test-") as directory:
         """(workspace, focused, tiled, x, y, width, height) per window, oldest first."""
         rows = [line.split("\t") for line in msg("get", "windows").splitlines()]
         return [(int(r[0]), r[1] == "1", r[3] == "1", *map(int, r[4:8])) for r in rows]
+
+    def wait_for(predicate, processes, message):
+        harness.wait_for(predicate, processes, message, detail=lambda: f"windows: {windows()}")
 
     def boxes(workspace=1):
         return sorted(w[3:] for w in windows() if w[0] == workspace)

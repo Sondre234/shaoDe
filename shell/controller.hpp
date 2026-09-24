@@ -40,7 +40,6 @@ class ShellController : public QObject {
     bool tiling() const { return tiling_; }
     bool tilingAvailable() const { return subscribed_; }
     Q_INVOKABLE bool launch(const QString &id);
-    Q_INVOKABLE QVariantList searchApps(const QString &query) const;
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void reload();
     Q_INVOKABLE void clearError();

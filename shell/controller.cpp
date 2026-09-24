@@ -13,15 +13,9 @@ ShellController::ShellController(std::filesystem::path path, QObject *parent)
     subscribe();
 }
 ShellController::~ShellController() { clearApps(); }
-QColor ShellController::accent() const {
-    return QColor(QString::fromStdString(config_.shell.accent));
-}
-QColor ShellController::panelColor() const {
-    return QColor(QString::fromStdString(config_.shell.panel_color));
-}
-QColor ShellController::textColor() const {
-    return QColor(QString::fromStdString(config_.shell.text_color));
-}
+QColor ShellController::accent() const { return QColor::fromString(config_.shell.accent); }
+QColor ShellController::panelColor() const { return QColor::fromString(config_.shell.panel_color); }
+QColor ShellController::textColor() const { return QColor::fromString(config_.shell.text_color); }
 QColor ShellController::background() const {
     return QColor::fromRgbF(config_.settings.background[0], config_.settings.background[1],
                             config_.settings.background[2]);
@@ -94,14 +88,6 @@ QVariantList ShellController::pinned() const {
     QVariantList list;
     for (const auto &app : apps_)
         if (app.pinned)
-            list.push_back(record(app));
-    return list;
-}
-QVariantList ShellController::searchApps(const QString &query) const {
-    QVariantList list;
-    for (const auto &app : apps_)
-        if (app.name.contains(query, Qt::CaseInsensitive) ||
-            app.id.contains(query, Qt::CaseInsensitive))
             list.push_back(record(app));
     return list;
 }
@@ -178,14 +164,12 @@ void ShellController::subscribe() {
     connect(state_, &QLocalSocket::readyRead, this, [this] {
         while (state_->canReadLine()) {
             const auto line = QString::fromUtf8(state_->readLine()).trimmed();
-            bool tiling = tiling_;
             if (line == "ok")
                 subscribed_ = true;
             else if (line.startsWith("tiling "))
-                tiling = line == "tiling on";
+                tiling_ = line == "tiling on";
             else
                 continue;
-            tiling_ = tiling;
             Q_EMIT tilingChanged();
         }
     });

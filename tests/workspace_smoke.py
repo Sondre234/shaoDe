@@ -5,21 +5,10 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
+
+from harness import wait_for
 
 compositor, probe, example = (str(Path(p).resolve()) for p in sys.argv[1:4])
-
-
-def wait_for(predicate, processes, message):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        for process in processes:
-            assert process.poll() is None, f"process exited ({process.returncode}): {message}"
-        if predicate():
-            return
-        time.sleep(.02)
-    raise AssertionError(f"timed out: {message}")
-
 
 with tempfile.TemporaryDirectory(prefix="shaode-workspace-test-") as directory:
     root = Path(directory)

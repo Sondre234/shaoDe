@@ -6,7 +6,8 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
+
+from harness import wait_for
 
 compositor, probe, example = map(lambda p: str(Path(p).resolve()), sys.argv[1:4])
 task_model_test = str(Path(sys.argv[4]).resolve()) if len(sys.argv) > 4 else None
@@ -21,16 +22,6 @@ for arguments, expected in [
                             capture_output=True, text=True, timeout=5)
     assert result.returncode != 0 and expected in result.stderr, result.stderr
 
-def wait_for(predicate, process, message):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"compositor exited with {process.returncode}: {message}")
-        if predicate():
-            return
-        time.sleep(0.02)
-    raise RuntimeError(f"timed out: {message}")
-
 with tempfile.TemporaryDirectory(prefix="shaode-test-") as directory:
     root = Path(directory)
     config = root / "init.lua"
@@ -43,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-test-") as directory:
         process = subprocess.Popen([compositor, "--headless", "--config", str(config)],
                                    env=env, stdout=output, stderr=output)
         try:
-            wait_for(lambda: "Running Wayland compositor" in log.read_text(), process, "startup")
+            wait_for(lambda: "Running Wayland compositor" in log.read_text(), [process], "startup")
             socket = re.search(r"WAYLAND_DISPLAY=(\S+)", log.read_text()).group(1)
             env["WAYLAND_DISPLAY"] = socket
             # Browsers and Electron apps expect these beyond the core desktop protocols.
@@ -67,10 +58,10 @@ with tempfile.TemporaryDirectory(prefix="shaode-test-") as directory:
                 subprocess.run([task_model_test, probe], env=env, check=True, timeout=15)
             config.write_text("return {appearance={background='#315071'}, layout={gap=12}}")
             process.send_signal(signal.SIGHUP)
-            wait_for(lambda: "Configuration reloaded" in log.read_text(), process, "valid reload")
+            wait_for(lambda: "Configuration reloaded" in log.read_text(), [process], "valid reload")
             config.write_text("return { layout = {gap = -1} }")
             process.send_signal(signal.SIGHUP)
-            wait_for(lambda: "Reload rejected" in log.read_text(), process, "rejected reload")
+            wait_for(lambda: "Reload rejected" in log.read_text(), [process], "rejected reload")
             subprocess.run([probe], env=env, check=True, timeout=10)
             # --check-config must reject invalid data without starting a display.
             result = subprocess.run([compositor, "--config", str(config), "--check-config"],

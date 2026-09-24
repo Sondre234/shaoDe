@@ -17,6 +17,10 @@
 
 extern char **environ;
 namespace {
+bool has_env(const char *name) {
+    const char *value = std::getenv(name);
+    return value && *value;
+}
 pid_t spawn(const shaode::Command &command) {
     std::vector<char *> argv;
     for (const auto &arg : command)
@@ -50,7 +54,7 @@ void export_activation_environment() {
     shaode::Command command{"dbus-update-activation-environment", "--systemd"};
     for (const char *name :
          {"WAYLAND_DISPLAY", "DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "SHAODE_SOCKET"})
-        if (const char *value = std::getenv(name); value && *value)
+        if (has_env(name))
             command.emplace_back(name);
     pid_t pid = spawn(command);
     // Wait briefly, so a portal started by the first applications already sees this session.
@@ -185,7 +189,8 @@ int send_message(int argc, char **argv) {
     for (int i = 2; i < argc; ++i)
         request += (i > 2 ? " " : "") + std::string(argv[i]);
     if (request.empty() || request.find('\n') != std::string::npos)
-        throw std::runtime_error("usage: shaode msg ACTION [ARGUMENT] | get workspace|windows");
+        throw std::runtime_error(
+            "usage: shaode msg ACTION [ARGUMENT] | get workspace|tiling|windows");
     const char *path = std::getenv("SHAODE_SOCKET");
     if (!path || !*path)
         throw std::runtime_error("SHAODE_SOCKET is not set; run inside a shaoDe session");
@@ -225,17 +230,15 @@ int send_message(int argc, char **argv) {
 }
 void usage() {
     std::cout
-        << "Usage: shaode [--config PATH] [--check-config] [--headless | --session] [--exec "
-           "PROGRAM "
-           "[ARGS...]]\n"
+        << "Usage: shaode [--config PATH] [--check-config] [--headless | --session] "
+           "[--exec PROGRAM [ARGS...]]\n"
            "Default: nested Wayland compositor. --session: standalone DRM/libinput on a TTY.\n"
            "Config: $XDG_CONFIG_HOME/shaode/init.lua or ~/.config/shaode/init.lua\n"
            "Falls back to the installed default; use --config config/init.lua in the source tree.\n"
-           "--no-shell disables automatic shell startup. Headless mode never starts it "
-           "automatically.\n"
+           "--no-shell disables automatic shell startup; headless mode never starts it.\n"
            "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n"
            "shaode msg ACTION [ARGUMENT] runs an action in the running session;\n"
-           "shaode msg get workspace|windows prints its state.\n";
+           "shaode msg get workspace|tiling|windows prints its state.\n";
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -284,12 +287,9 @@ int main(int argc, char **argv) {
                       << " bindings)\n";
             return 0;
         }
-        if (mode == SH_BACKEND_NESTED &&
-            (!std::getenv("WAYLAND_DISPLAY") || !*std::getenv("WAYLAND_DISPLAY")))
+        if (mode == SH_BACKEND_NESTED && !has_env("WAYLAND_DISPLAY"))
             throw std::runtime_error("a running Wayland session is required (or use --headless)");
-        if (mode == SH_BACKEND_SESSION &&
-            ((std::getenv("WAYLAND_DISPLAY") && *std::getenv("WAYLAND_DISPLAY")) ||
-             (std::getenv("DISPLAY") && *std::getenv("DISPLAY"))))
+        if (mode == SH_BACKEND_SESSION && (has_env("WAYLAND_DISPLAY") || has_env("DISPLAY")))
             throw std::runtime_error("start --session from a TTY or a display manager, outside an "
                                      "existing graphical session");
         const sh_callbacks callbacks{

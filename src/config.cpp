@@ -61,15 +61,40 @@ int integer(lua_State *L, const char *key, int fallback, int min, int max) {
     lua_pop(L, 1);
     return static_cast<int>(result);
 }
-void text_field(lua_State *L, const char *key, char (&target)[128]) {
+template <std::size_t N>
+void copy_text(const std::string &value, char (&target)[N], const std::string &label) {
+    if (value.size() >= N)
+        fail(label + " is too long");
+    std::memcpy(target, value.c_str(), value.size() + 1);
+}
+template <std::size_t N> void text_field(lua_State *L, const char *key, char (&target)[N]) {
+    lua_getfield(L, -1, key);
+    if (!lua_isnil(L, -1))
+        copy_text(string(L, -1, key), target, key);
+    lua_pop(L, 1);
+}
+void boolean(lua_State *L, const char *key, const char *label, bool &target) {
     lua_getfield(L, -1, key);
     if (!lua_isnil(L, -1)) {
-        auto value = string(L, -1, key);
-        if (value.size() >= sizeof(target))
-            fail(std::string(key) + " is too long");
-        std::memcpy(target, value.c_str(), value.size() + 1);
+        if (!lua_isboolean(L, -1))
+            fail(std::string(label) + " must be a boolean");
+        target = lua_toboolean(L, -1);
     }
     lua_pop(L, 1);
+}
+bool is_color(const std::string &value) {
+    return value.size() == 7 && value[0] == '#' &&
+           value.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos;
+}
+// Pushes the optional table `name`, checking its keys; returns false when it is absent. The
+// caller pops it either way.
+bool section(lua_State *L, const char *name, std::initializer_list<std::string_view> allowed) {
+    lua_getfield(L, -1, name);
+    if (lua_isnil(L, -1))
+        return false;
+    table(L, -1, name);
+    keys(L, -1, allowed);
+    return true;
 }
 size_t array_size(lua_State *L, int index, size_t limit) {
     table(L, index, "list");
@@ -91,14 +116,10 @@ size_t array_size(lua_State *L, int index, size_t limit) {
     return size;
 }
 uint32_t modifier(const std::string &name) {
-    if (name == "Alt")
-        return SH_ALT;
-    if (name == "Super")
-        return SH_LOGO;
-    if (name == "Ctrl")
-        return SH_CTRL;
-    if (name == "Shift")
-        return SH_SHIFT;
+    for (auto [candidate, bit] :
+         {std::pair{"Alt", SH_ALT}, {"Super", SH_LOGO}, {"Ctrl", SH_CTRL}, {"Shift", SH_SHIFT}})
+        if (name == candidate)
+            return bit;
     fail("unknown modifier '" + name + "'");
 }
 Command command(lua_State *L) {
@@ -115,61 +136,14 @@ Command command(lua_State *L) {
         fail("command executable is empty");
     return result;
 }
-sh_action action(const std::string &name) {
-    if (name == "spawn")
-        return SH_HANDLED;
-    if (name == "quit")
-        return SH_QUIT;
-    if (name == "close")
-        return SH_CLOSE;
-    if (name == "cycle")
-        return SH_CYCLE;
-    if (name == "snap_left")
-        return SH_SNAP_LEFT;
-    if (name == "snap_right")
-        return SH_SNAP_RIGHT;
-    if (name == "maximize")
-        return SH_MAXIMIZE;
-    if (name == "restore")
-        return SH_RESTORE;
-    if (name == "tile")
-        return SH_TILE;
-    if (name == "reload")
-        return SH_RELOAD;
-    if (name == "fullscreen")
-        return SH_FULLSCREEN;
-    if (name == "workspace")
-        return SH_WORKSPACE;
-    if (name == "move_to_workspace")
-        return SH_MOVE_TO_WORKSPACE;
-    if (name == "workspace_next")
-        return SH_WORKSPACE_NEXT;
-    if (name == "workspace_prev")
-        return SH_WORKSPACE_PREV;
-    if (name == "toggle_tiling")
-        return SH_TOGGLE_TILING;
-    if (name == "toggle_floating")
-        return SH_TOGGLE_FLOATING;
-    fail("unknown action '" + name + "'");
-}
-
 void read_shell(lua_State *L, ShellConfig &shell) {
-    lua_getfield(L, -1, "shell");
-    if (lua_isnil(L, -1)) {
+    if (!section(L, "shell",
+                 {"enabled", "panel_height", "accent", "panel_color", "text_color", "wallpaper",
+                  "launchers"})) {
         lua_pop(L, 1);
         return;
     }
-    table(L, -1, "shell");
-    keys(L, -1,
-         {"enabled", "panel_height", "accent", "panel_color", "text_color", "wallpaper",
-          "launchers"});
-    lua_getfield(L, -1, "enabled");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isboolean(L, -1))
-            fail("shell.enabled must be a boolean");
-        shell.enabled = lua_toboolean(L, -1);
-    }
-    lua_pop(L, 1);
+    boolean(L, "enabled", "shell.enabled", shell.enabled);
     shell.panel_height = integer(L, "panel_height", 52, 32, 100);
     for (auto [key, target] : {std::pair{"accent", &shell.accent},
                                {"panel_color", &shell.panel_color},
@@ -178,9 +152,7 @@ void read_shell(lua_State *L, ShellConfig &shell) {
         lua_getfield(L, -1, key);
         if (!lua_isnil(L, -1)) {
             *target = string(L, -1, key);
-            if (target != &shell.wallpaper &&
-                (target->size() != 7 || (*target)[0] != '#' ||
-                 target->find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos))
+            if (target != &shell.wallpaper && !is_color(*target))
                 fail(std::string(key) + " must be #RRGGBB");
         }
         lua_pop(L, 1);
@@ -222,75 +194,46 @@ Config read(lua_State *L) {
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
-    lua_getfield(L, -1, "xwayland");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isboolean(L, -1))
-            fail("xwayland must be a boolean");
-        config.settings.xwayland = lua_toboolean(L, -1);
-    }
-    lua_pop(L, 1);
-    lua_getfield(L, -1, "appearance");
-    if (!lua_isnil(L, -1)) {
-        table(L, -1, "appearance");
-        keys(L, -1, {"background"});
+    boolean(L, "xwayland", "xwayland", config.settings.xwayland);
+    if (section(L, "appearance", {"background"})) {
         auto color = field(L, "background");
-        if (color.size() != 7 || color[0] != '#' ||
-            color.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos)
+        if (!is_color(color))
             fail("background must be #RRGGBB");
         for (size_t i = 0; i < 3; ++i)
             config.settings.background[i] =
                 std::stoi(color.substr(1 + 2 * i, 2), nullptr, 16) / 255.0F;
     }
     lua_pop(L, 1);
-    lua_getfield(L, -1, "keyboard");
-    if (!lua_isnil(L, -1)) {
-        table(L, -1, "keyboard");
-        keys(L, -1, {"layout", "options", "repeat_rate", "repeat_delay"});
+    if (section(L, "keyboard", {"layout", "options", "repeat_rate", "repeat_delay"})) {
         text_field(L, "layout", config.settings.keyboard_layout);
         text_field(L, "options", config.settings.keyboard_options);
         config.settings.repeat_rate = integer(L, "repeat_rate", 25, 0, 100);
         config.settings.repeat_delay = integer(L, "repeat_delay", 600, 0, 5000);
     }
     lua_pop(L, 1);
-    lua_getfield(L, -1, "mouse");
-    if (!lua_isnil(L, -1)) {
-        table(L, -1, "mouse");
-        keys(L, -1, {"modifier"});
+    if (section(L, "mouse", {"modifier"})) {
         config.settings.mouse_modifier = modifier(field(L, "modifier"));
     }
     lua_pop(L, 1);
-    lua_getfield(L, -1, "layout");
-    if (!lua_isnil(L, -1)) {
-        table(L, -1, "layout");
-        keys(L, -1, {"gap", "workspaces", "tiling"});
+    if (section(L, "layout", {"gap", "workspaces", "tiling"})) {
         config.settings.gap = integer(L, "gap", 8, 0, 100);
-        lua_getfield(L, -1, "tiling");
-        if (!lua_isnil(L, -1)) {
-            if (!lua_isboolean(L, -1))
-                fail("layout.tiling must be a boolean");
-            config.settings.tiling = lua_toboolean(L, -1);
-        }
-        lua_pop(L, 1);
+        boolean(L, "tiling", "layout.tiling", config.settings.tiling);
         config.settings.workspaces = integer(L, "workspaces", 4, 1, 10);
     }
     lua_pop(L, 1);
-    lua_getfield(L, -1, "outputs");
-    if (!lua_isnil(L, -1)) {
-        table(L, -1, "outputs");
-        keys(L, -1, {"order", "primary"});
+    if (section(L, "outputs", {"order", "primary"})) {
         lua_getfield(L, -1, "order");
         if (!lua_isnil(L, -1)) {
             auto size = array_size(L, -1, std::size(config.settings.output_order));
             for (size_t i = 1; i <= size; ++i) {
                 lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
                 auto name = string(L, -1, "output name");
-                auto &slot = config.settings.output_order[i - 1];
-                if (name.empty() || name.size() >= sizeof(slot))
-                    fail("output name is empty or too long");
+                if (name.empty())
+                    fail("output name is empty");
                 for (size_t j = 0; j + 1 < i; ++j)
                     if (name == config.settings.output_order[j])
                         fail("duplicate output '" + name + "'");
-                std::memcpy(slot, name.c_str(), name.size() + 1);
+                copy_text(name, config.settings.output_order[i - 1], "output name");
                 lua_pop(L, 1);
             }
             config.settings.output_count = static_cast<int>(size);
@@ -299,9 +242,9 @@ Config read(lua_State *L) {
         lua_getfield(L, -1, "primary");
         if (!lua_isnil(L, -1)) {
             auto name = string(L, -1, "primary");
-            if (name.empty() || name.size() >= sizeof(config.settings.primary_output))
-                fail("primary output name is empty or too long");
-            std::memcpy(config.settings.primary_output, name.c_str(), name.size() + 1);
+            if (name.empty())
+                fail("primary output name is empty");
+            copy_text(name, config.settings.primary_output, "primary output name");
         }
         lua_pop(L, 1);
     }
@@ -319,7 +262,7 @@ Config read(lua_State *L) {
                 xkb_keysym_to_lower(xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_NO_FLAGS));
             if (binding.keysym == XKB_KEY_NoSymbol)
                 fail("unknown key '" + key + "'");
-            binding.action = action(field(L, "action"));
+            binding.action = parse_action(field(L, "action"));
             lua_getfield(L, -1, "mods");
             auto mods = array_size(L, -1, 4);
             for (size_t j = 1; j <= mods; ++j) {
@@ -381,7 +324,31 @@ Config read(lua_State *L) {
 }
 } // namespace
 
-sh_action parse_action(const std::string &name) { return action(name); }
+sh_action parse_action(const std::string &name) {
+    static constexpr std::pair<std::string_view, sh_action> actions[] = {
+        {"spawn", SH_HANDLED},
+        {"quit", SH_QUIT},
+        {"close", SH_CLOSE},
+        {"cycle", SH_CYCLE},
+        {"snap_left", SH_SNAP_LEFT},
+        {"snap_right", SH_SNAP_RIGHT},
+        {"maximize", SH_MAXIMIZE},
+        {"restore", SH_RESTORE},
+        {"tile", SH_TILE},
+        {"reload", SH_RELOAD},
+        {"fullscreen", SH_FULLSCREEN},
+        {"workspace", SH_WORKSPACE},
+        {"move_to_workspace", SH_MOVE_TO_WORKSPACE},
+        {"workspace_next", SH_WORKSPACE_NEXT},
+        {"workspace_prev", SH_WORKSPACE_PREV},
+        {"toggle_tiling", SH_TOGGLE_TILING},
+        {"toggle_floating", SH_TOGGLE_FLOATING},
+    };
+    for (const auto &[candidate, action] : actions)
+        if (name == candidate)
+            return action;
+    fail("unknown action '" + name + "'");
+}
 
 bool action_takes_workspace(sh_action action) {
     return action == SH_WORKSPACE || action == SH_MOVE_TO_WORKSPACE;

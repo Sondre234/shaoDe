@@ -6,20 +6,10 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
+
+from harness import wait_for
 
 compositor, shell, probe, example = (str(Path(p).resolve()) for p in sys.argv[1:])
-
-
-def wait_for(predicate, processes, message):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        assert all(p.poll() is None for p in processes), f"process exited: {message}"
-        if predicate():
-            return
-        time.sleep(.02)
-    raise AssertionError(f"timed out: {message}")
-
 
 with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
     root = Path(directory)

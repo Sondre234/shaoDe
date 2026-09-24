@@ -5,21 +5,10 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
+
+from harness import wait_for
 
 compositor, x11_probe, wayland_probe, example = (str(Path(p).resolve()) for p in sys.argv[1:5])
-
-
-def wait_for(predicate, processes, message):
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        for process in processes:
-            assert process.poll() is None, f"process exited ({process.returncode}): {message}"
-        if predicate():
-            return
-        time.sleep(.02)
-    raise AssertionError(f"timed out: {message}")
-
 
 with tempfile.TemporaryDirectory(prefix="shaode-xwayland-test-") as directory:
     root = Path(directory)
@@ -36,7 +25,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-xwayland-test-") as directory:
         server = subprocess.Popen([compositor, "--headless", "--config", str(config)],
                                   env=env, stdout=output, stderr=output)
         try:
-            wait_for(lambda: "Running Wayland compositor" in log.read_text(), [server], "startup")
+            wait_for(lambda: "Running Wayland compositor" in log.read_text(), [server], "startup",
+                     timeout=10)
             assert "XWayland listening" not in log.read_text(), log.read_text()
         finally:
             server.terminate()
@@ -48,7 +38,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-xwayland-test-") as directory:
                                   env=env, stdout=output, stderr=output)
         processes = [server]
         try:
-            wait_for(lambda: "Running Wayland compositor" in log.read_text(), processes, "startup")
+            wait_for(lambda: "Running Wayland compositor" in log.read_text(), processes, "startup",
+                     timeout=10)
             text = log.read_text()
             env["WAYLAND_DISPLAY"] = re.search(r"WAYLAND_DISPLAY=(\S+)", text)[1]
             env["DISPLAY"] = re.search(r"XWayland listening on DISPLAY=(\S+)", text)[1]
