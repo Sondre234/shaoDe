@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Windows opening into the tiling get their tile size before their first buffer, and each
-reflow sends one configure to the tiles that change and none to the rest."""
+reflow sends one configure to the tiles that change and none to the rest. Also: a taskbar
+maximize request leaves a fullscreen tile alone."""
 import os
 from pathlib import Path
 import re
@@ -83,6 +84,19 @@ with tempfile.TemporaryDirectory(prefix="shaode-tiling-open-test-") as directory
                 previous = boxes
             # The third window split the second (focused) one and left the first alone.
             assert previous[0][2:] == windows()[0][2:]
+
+            # A taskbar maximize request leaves a fullscreen window alone, as a client's does.
+            output = subprocess.run([compositor, "msg", "get", "outputs"], env=env,
+                                    capture_output=True, text=True, timeout=5).stdout
+            subprocess.run([compositor, "msg", "fullscreen"], env=env, check=True, timeout=5)
+            full = [(0, 0, *map(int, re.search(r"(\d+)x(\d+)", output).groups()))]
+            wait_for(lambda: windows()[2] == full[0], "focused window fullscreen")
+            subprocess.run([probe, "--maximize", "shaode-probe"], env=env, check=True,
+                           capture_output=True, timeout=5)
+            subprocess.run([probe, "--globals"], env=env, capture_output=True, timeout=5)
+            assert windows()[2] == full[0], windows()
+            subprocess.run([compositor, "msg", "fullscreen"], env=env, check=True, timeout=5)
+            wait_for(lambda: windows() == previous, "tile restored after fullscreen")
 
             for window in processes[1:]:
                 window.kill()

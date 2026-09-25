@@ -2438,6 +2438,8 @@ static void foreign_close(struct wl_listener *listener, void *data) {
 static void foreign_maximize(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, foreign_maximize);
     struct wlr_foreign_toplevel_handle_v1_maximized_event *event = data;
+    if (toplevel->fullscreen)
+        return; // As for the client's own request: fullscreen wins.
     if (!event->maximized) {
         restore_toplevel(toplevel);
         return;
