@@ -156,3 +156,16 @@ capture source. `compositor_smoke` checks that every one of these globals is adv
 Not yet exercised: screen sharing end to end through xdg-desktop-portal-wlr and
 PipeWire, the D-Bus environment export in a physical `--session`, drag-and-drop, pointer
 lock, and popup placement at output edges.
+
+## Panel context menus
+
+Added 2026-09-25. The task menu used a `TapHandler`, which drops a press held past
+the long-press time (0.8 s) and one that moves past the drag threshold, so a
+right-click could open nothing. Menus now open on press. In a headless session
+(pixman and GLES2, output scale 1.25 and three outputs, a floating bar) driven by a
+scratch `zwlr_virtual_pointer_v1` client, right-clicking a task showed its menu on
+every output, and Maximize / restore, Minimize and Close window acted on foot;
+right-clicking empty bar space showed the bar menu, whose tiling and Applications
+items worked. `shell_ui` right-clicks a stand-in task (holding the button for a
+second) and empty bar space, and checks each menu lies inside the grown surface.
+Not yet checked with a physical mouse or touchpad.

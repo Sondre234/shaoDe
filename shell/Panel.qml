@@ -6,14 +6,25 @@ import QtQuick.Layouts
 Item {
     id: root
     property bool launcherOpen: false
+    // The context menu belongs to a task, or to the bar itself when barMenuOpen is set.
     property int taskMenuId: -1
-    property real taskMenuX: 0
-    property bool menuOpen: launcherOpen || taskMenuId >= 0
+    property bool barMenuOpen: false
+    property real contextMenuX: 0
+    property bool menuOpen: launcherOpen || taskMenuId >= 0 || barMenuOpen
     onMenuOpenChanged: shellView.setExpanded(menuOpen)
     onLauncherOpenChanged: {
-        if (launcherOpen) { taskMenuId = -1; search.text = ""; search.forceActiveFocus() }
+        if (launcherOpen) { taskMenuId = -1; barMenuOpen = false; search.text = ""; search.forceActiveFocus() }
     }
-    function closeMenus() { launcherOpen = false; taskMenuId = -1 }
+    function closeMenus() { launcherOpen = false; taskMenuId = -1; barMenuOpen = false }
+    // Opens on press, as a desktop context menu does: waiting for a tap lost a press held
+    // past the long-press time or moved while held. The new menu opens before the old one
+    // closes, so the surface does not collapse in between.
+    function openContextMenu(item, x, taskId) {
+        contextMenuX = item.mapToItem(root, x, 0).x
+        if (taskId >= 0) { taskMenuId = taskId; barMenuOpen = false }
+        else { barMenuOpen = true; taskMenuId = -1 }
+        launcherOpen = false
+    }
     // Popups open away from the screen edge the bar sits on.
     readonly property bool onTop: shell.panelTop
     readonly property string uiFont: shell.fontFamily.length > 0 ? shell.fontFamily : Qt.application.font.family
@@ -114,30 +125,41 @@ Item {
     }
 
     Rectangle {
-        visible: root.taskMenuId >= 0
-        width: 220; height: 150
-        x: Math.max(8, Math.min(root.taskMenuX, root.width - width - 8))
+        id: contextMenu
+        objectName: "contextMenu"
+        readonly property var actions: root.taskMenuId >= 0
+            ? [{ text: "Maximize / restore", run: function(id) { shell.tasks.maximize(id) } },
+               { text: "Minimize", run: function(id) { shell.tasks.minimize(id) } },
+               { text: "Close window", run: function(id) { shell.tasks.close(id) } }]
+            : [{ text: shell.tiling ? "Turn tiling off" : "Turn tiling on", enabled: shell.tilingAvailable,
+                 run: function() { shell.toggleTiling() } },
+               { text: "Applications", run: function() { root.launcherOpen = true } },
+               { text: "Show desktop", run: function() { shell.tasks.showDesktop() } }]
+        visible: root.taskMenuId >= 0 || root.barMenuOpen
+        width: 220; height: 12 + actions.length * 44 + (actions.length - 1) * 2
+        x: Math.max(8, Math.min(root.contextMenuX, root.width - width - 8))
         anchors.bottom: root.onTop ? undefined : bar.top; anchors.bottomMargin: 8
         anchors.top: root.onTop ? bar.bottom : undefined; anchors.topMargin: 8
         color: shell.panelColor; radius: 10
         border.color: Qt.lighter(shell.panelColor, 1.6)
+        MouseArea { anchors.fill: parent }
         Column {
             anchors.fill: parent; anchors.margins: 6; spacing: 2
             Repeater {
-                model: ["Maximize / restore", "Minimize", "Close window"]
+                model: contextMenu.actions
                 delegate: Button {
-                    required property string modelData
-                    required property int index
+                    required property var modelData
+                    objectName: "contextMenuItem"
                     width: parent.width; height: 44
-                    text: modelData
+                    text: modelData.text
+                    enabled: modelData.enabled !== false
+                    opacity: enabled ? 1 : 0.4
                     palette.buttonText: shell.textColor
                     background: Rectangle { color: parent.hovered ? Qt.lighter(shell.panelColor, 1.5) : "transparent"; radius: 6 }
+                    // Run before closing, so opening the launcher keeps the surface expanded.
                     onClicked: {
-                        var id = root.taskMenuId
-                        root.closeMenus()
-                        if (index === 0) shell.tasks.maximize(id)
-                        else if (index === 1) shell.tasks.minimize(id)
-                        else shell.tasks.close(id)
+                        modelData.run(root.taskMenuId)
+                        root.taskMenuId = -1; root.barMenuOpen = false
                     }
                 }
             }
@@ -161,6 +183,12 @@ Item {
             visible: !root.floating
             y: root.onTop ? parent.height - 1 : 0
             width: parent.width; height: 1; color: Qt.lighter(shell.panelColor, 1.65)
+        }
+        // Right-clicking the bar anywhere but on a task opens the bar's own menu.
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.RightButton
+            onPressed: (mouse) => root.openContextMenu(bar, mouse.x, -1)
         }
         RowLayout {
             anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8
@@ -192,6 +220,7 @@ Item {
             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Qt.lighter(shell.panelColor, 1.8) }
             ListView {
                 id: taskList
+                objectName: "taskList"
                 Layout.fillWidth: true; Layout.fillHeight: true
                 orientation: ListView.Horizontal; spacing: 4; clip: true
                 model: shell.tasks
@@ -216,11 +245,11 @@ Item {
                         Image { source: "image://icons/" + taskButton.appId; sourceSize: Qt.size(22, 22); Layout.preferredWidth: 22; Layout.preferredHeight: 22 }
                         Text { text: taskButton.title; color: shell.textColor; elide: Text.ElideRight; Layout.fillWidth: true; font.pixelSize: shell.fontSize; font.family: root.uiFont }
                     }
-                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: {
-                        root.launcherOpen = false
-                        root.taskMenuX = taskButton.mapToItem(root, 0, 0).x
-                        root.taskMenuId = taskButton.taskId
-                    } }
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        onPressed: root.openContextMenu(taskButton, 0, taskButton.taskId)
+                    }
                 }
             }
             Button {

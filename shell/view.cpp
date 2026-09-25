@@ -82,10 +82,8 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
     });
     connect(screen, &QScreen::geometryChanged, this, [this] { resizeForContent(); });
     connect(this, &QWindow::activeChanged, this, [this] {
-        if (!isActive() && expanded_ && rootObject()) {
-            rootObject()->setProperty("launcherOpen", false);
-            rootObject()->setProperty("taskMenuId", -1);
-        }
+        if (!isActive() && expanded_ && rootObject())
+            QMetaObject::invokeMethod(rootObject(), "closeMenus");
     });
 }
 // The panel's surface spans the output's width and the bar's margins; the bar is drawn inset.

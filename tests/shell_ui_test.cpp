@@ -5,9 +5,12 @@
 #include <QGuiApplication>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QQmlComponent>
+#include <QQmlEngine>
 #include <QQuickItem>
 #include <QTemporaryDir>
 #include <QTest>
+#include <functional>
 #include <iostream>
 
 int main(int argc, char **argv) {
@@ -43,10 +46,10 @@ int main(int argc, char **argv) {
                 subscriber = client;
                 client->write("ok\ntiling off\nworkspace 1\n");
             } else if (request == "toggle_tiling\n") {
-                toggled = true;
+                toggled = !toggled;
                 client->write("ok\n");
                 client->disconnectFromServer();
-                subscriber->write("tiling on\nworkspace 1\n");
+                subscriber->write(toggled ? "tiling on\nworkspace 1\n" : "tiling off\nworkspace 1\n");
             }
         });
     });
@@ -97,6 +100,79 @@ int main(int argc, char **argv) {
         std::cerr << "the tiling button did not toggle tiling\n";
         return 1;
     }
-    std::cout << "Hover/click, launcher keyboard focus, search, command launch, and tiling toggle "
-                 "passed\n";
+    // Context menus: a task's, then the bar's. A stand-in task list replaces the Wayland one.
+    auto *tasks = view.rootObject()->findChild<QQuickItem *>("taskList");
+    QQmlComponent fakeTasks(view.engine());
+    fakeTasks.setData("import QtQml.Models\nListModel { ListElement { taskId: 7; title: 'Fake'; "
+                      "appId: 'fake'; active: false; minimized: false } }",
+                      QUrl());
+    QObject *fakeModel = fakeTasks.create();
+    if (!tasks || !fakeModel)
+        return 1;
+    tasks->setProperty("model", QVariant::fromValue(fakeModel));
+    QQuickItem *task = nullptr;
+    if (!QTest::qWaitFor([&] {
+            QMetaObject::invokeMethod(tasks, "itemAtIndex", Q_RETURN_ARG(QQuickItem *, task),
+                                      Q_ARG(int, 0));
+            return task != nullptr;
+        }))
+        return 1;
+    auto center = [](QQuickItem *item) {
+        return item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint();
+    };
+    auto *menu = view.rootObject()->findChild<QQuickItem *>("contextMenu");
+    // Repeater delegates are visual children only, so walk the item tree.
+    std::function<QQuickItem *(QQuickItem *, const QString &)> find =
+        [&](QQuickItem *parent, const QString &text) -> QQuickItem * {
+        for (auto *item : parent->childItems()) {
+            if (item->objectName() == "contextMenuItem" && item->property("text") == text)
+                return item;
+            if (auto *found = find(item, text))
+                return found;
+        }
+        return nullptr;
+    };
+    auto menuItem = [&](const QString &text) { return find(menu, text); };
+    // The whole menu must lie inside the panel surface, which grows to make room for it.
+    auto menuShown = [&] {
+        QRectF area = menu->mapRectToScene(QRectF(0, 0, menu->width(), menu->height()));
+        return menu->isVisible() && view.height() > controller.panelExtent() &&
+               area.top() >= 0 && area.bottom() <= view.height();
+    };
+    const QPoint entry = center(task);
+    // Held past the long-press time, which once swallowed the right click.
+    QTest::mousePress(&view, Qt::RightButton, Qt::NoModifier, entry);
+    QTest::qWait(1000);
+    QTest::mouseRelease(&view, Qt::RightButton, Qt::NoModifier, center(task));
+    if (!QTest::qWaitFor([&] {
+            return view.rootObject()->property("taskMenuId").toInt() == 7 && menuShown();
+        }) ||
+        !menuItem("Maximize / restore") || !menuItem("Minimize") || !menuItem("Close window")) {
+        std::cerr << "right-clicking a task did not show its menu\n";
+        return 1;
+    }
+    QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, center(menuItem("Minimize")));
+    if (!QTest::qWaitFor([&] { return !view.rootObject()->property("menuOpen").toBool(); }) ||
+        !QTest::qWaitFor([&] { return view.height() == controller.panelExtent(); })) {
+        std::cerr << "choosing a task menu item did not close the menu\n";
+        return 1;
+    }
+    // Empty bar space, right of the only task, opens the bar menu.
+    const QPoint empty = task->mapToScene(QPointF(task->width() + 40, task->height() / 2)).toPoint();
+    QTest::mouseClick(&view, Qt::RightButton, Qt::NoModifier, empty);
+    if (!QTest::qWaitFor([&] {
+            return view.rootObject()->property("barMenuOpen").toBool() && menuShown();
+        }) ||
+        !menuItem("Turn tiling off") || !menuItem("Applications")) {
+        std::cerr << "right-clicking empty bar space did not show the bar menu\n";
+        return 1;
+    }
+    QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, center(menuItem("Turn tiling off")));
+    if (!QTest::qWaitFor([&] { return !toggled && !controller.tiling(); }) ||
+        view.rootObject()->property("menuOpen").toBool()) {
+        std::cerr << "the bar menu did not toggle tiling off\n";
+        return 1;
+    }
+    std::cout << "Hover/click, launcher keyboard focus, search, command launch, tiling toggle, and "
+                 "task and bar context menus passed\n";
 }
