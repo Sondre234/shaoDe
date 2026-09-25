@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
     try {
         require(argc == 2, "example config path required");
         auto config = shaode::load_config(argv[1]);
-        require(config.bindings.size() == 28, "example shortcuts missing");
+        require(config.bindings.size() == 31, "example shortcuts missing");
         require(config.shell.enabled && config.shell.panel_height == 52 &&
                     config.shell.launchers.size() == 2,
                 "example shell settings missing");
@@ -49,6 +49,35 @@ int main(int argc, char **argv) {
         require(shaode::parse_action("toggle_floating") == SH_TOGGLE_FLOATING,
                 "toggle_floating action missing");
         rejects("return {layout={tiling='yes'}}");
+        auto *region = config.binding(0, XKB_KEY_Print);
+        auto *whole = config.binding(SH_SHIFT, XKB_KEY_Print);
+        auto *window = config.binding(SH_LOGO, XKB_KEY_Print);
+        require(region && region->action == SH_SCREENSHOT &&
+                    region->screenshot == SH_SCREENSHOT_REGION && whole &&
+                    whole->screenshot == SH_SCREENSHOT_OUTPUT && window &&
+                    window->screenshot == SH_SCREENSHOT_WINDOW,
+                "screenshot bindings missing");
+        require(config.screenshots.directory.empty() && config.screenshots.clipboard &&
+                    config.screenshots.notify,
+                "example screenshot settings changed");
+        auto shots = shaode::parse_config(
+            "return {screenshots={directory='~/Shots',clipboard=false,notify=false},"
+            "bindings={{mods={'Alt'},key='Print',action='screenshot'}}}");
+        require(shots.screenshots.directory == "~/Shots" && !shots.screenshots.clipboard &&
+                    !shots.screenshots.notify &&
+                    shots.bindings[0].screenshot == SH_SCREENSHOT_REGION,
+                "screenshot settings not parsed");
+        require(shaode::parse_screenshot_mode("window") == SH_SCREENSHOT_WINDOW,
+                "screenshot mode names differ");
+        require(shaode::parse_config("return {screenshots={directory='/tmp/x'}}")
+                        .screenshots.directory == "/tmp/x",
+                "absolute screenshot directory not parsed");
+        rejects("return {screenshots={directory='Shots'}}");
+        rejects("return {screenshots={directory=1}}");
+        rejects("return {screenshots={clipboard='yes'}}");
+        rejects("return {screenshots={format='jpeg'}}");
+        rejects("return {bindings={{mods={},key='Print',action='screenshot',mode='screen'}}}");
+        rejects("return {bindings={{mods={},key='Print',action='close',mode='window'}}}");
         auto outputs =
             shaode::parse_config("return {outputs={order={'HDMI-A-1','DP-3'},primary='DP-3'}}");
         require(outputs.settings.output_count == 2 &&
@@ -204,7 +233,7 @@ int main(int argc, char **argv) {
             config = shaode::parse_config("return {layout={gap=999}}");
         } catch (const std::exception &) {
         }
-        require(config.settings.gap_inner == 8 && config.bindings.size() == 28,
+        require(config.settings.gap_inner == 8 && config.bindings.size() == 31,
                 "failed reload changed active configuration");
         std::cout << "Configuration validation, bindings, and transactional loading passed\n";
     } catch (const std::exception &error) {

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -70,6 +71,60 @@ void export_activation_environment() {
     if (pid > 0)
         std::cerr << "dbus-update-activation-environment is still running; not waiting\n";
 }
+// The executable `name` on PATH, or an empty path.
+std::filesystem::path find_program(const std::string &name) {
+    const char *path = std::getenv("PATH");
+    std::istringstream directories(path ? path : "");
+    for (std::string directory; std::getline(directories, directory, ':');) {
+        auto candidate = std::filesystem::path(directory.empty() ? "." : directory) / name;
+        if (access(candidate.c_str(), X_OK) == 0 && !std::filesystem::is_directory(candidate))
+            return candidate;
+    }
+    return {};
+}
+std::filesystem::path home_directory() {
+    const char *home = std::getenv("HOME");
+    return home && *home ? home : "/";
+}
+/* $XDG_PICTURES_DIR from the environment or user-dirs.dirs, else ~/Pictures. */
+std::filesystem::path pictures_directory() {
+    if (const char *pictures = std::getenv("XDG_PICTURES_DIR"); pictures && *pictures == '/')
+        return pictures;
+    const char *config = std::getenv("XDG_CONFIG_HOME");
+    std::ifstream dirs(
+        (config && *config ? std::filesystem::path(config) : home_directory() / ".config") /
+        "user-dirs.dirs");
+    for (std::string line; std::getline(dirs, line);) {
+        if (!line.starts_with("XDG_PICTURES_DIR=\"") || !line.ends_with('"'))
+            continue;
+        auto value = line.substr(18, line.size() - 19);
+        if (value.starts_with("$HOME/"))
+            return home_directory() / value.substr(6);
+        if (value.starts_with('/'))
+            return value;
+    }
+    return home_directory() / "Pictures";
+}
+/* Runs slurp (for a region), grim, wl-copy, and notify-send one after another without blocking
+ * the compositor. Arguments: file, mode, grim target (geometry or output name), copy, notify. */
+constexpr const char *screenshot_script = R"sh(
+file=$1 mode=$2 target=$3 copy=$4 notify=$5
+if [ "$mode" = region ]; then
+    target=$(slurp) || { echo "Screenshot cancelled" >&2; exit 0; }
+fi
+if [ "$mode" = output ]; then
+    grim -o "$target" "$file"
+else
+    grim -g "$target" "$file"
+fi || { echo "Screenshot failed: grim exited with status $?" >&2; exit 1; }
+echo "Screenshot saved: $file" >&2
+if [ "$copy" = 1 ]; then
+    wl-copy --type image/png < "$file" || echo "Screenshot not copied: wl-copy failed" >&2
+fi
+if [ "$notify" = 1 ]; then
+    notify-send -a shaoDe -i "$file" "Screenshot saved" "$file"
+fi
+)sh";
 struct Runtime {
     std::filesystem::path path;
     shaode::Config config;
@@ -112,10 +167,11 @@ struct Runtime {
             return SH_NONE;
         if (binding->action == SH_HANDLED)
             spawn(binding->command);
-        *argument = binding->workspace;
+        *argument = binding->action == SH_SCREENSHOT ? binding->screenshot : binding->workspace;
         return binding->action;
     }
-    /* Control requests: "<action> [workspace]" or "spawn PROGRAM [ARGS...]". */
+    /* Control requests: "<action> [workspace]", "screenshot [region|output|window]", or
+     * "spawn PROGRAM [ARGS...]". */
     static sh_action command(void *data, const char *request, int *argument, char *error,
                              size_t error_size) {
         auto &self = *static_cast<Runtime *>(data);
@@ -140,6 +196,12 @@ struct Runtime {
                     throw std::runtime_error(words[0] + " needs a workspace from 1 to " +
                                              std::to_string(self.config.settings.workspaces));
                 *argument = number;
+            } else if (action == SH_SCREENSHOT) {
+                if (words.size() > 2)
+                    throw std::runtime_error(
+                        "screenshot takes one mode: region, output, or window");
+                *argument = words.size() == 2 ? shaode::parse_screenshot_mode(words[1])
+                                              : SH_SCREENSHOT_REGION;
             } else if (words.size() != 1) {
                 throw std::runtime_error(words[0] + " takes no argument");
             }
@@ -147,6 +209,58 @@ struct Runtime {
         } catch (const std::exception &failure) {
             std::snprintf(error, error_size, "%s", failure.what());
             return SH_NONE;
+        }
+    }
+    std::filesystem::path screenshot_directory() const {
+        const auto &directory = config.screenshots.directory;
+        if (directory.starts_with("~/"))
+            return home_directory() / directory.substr(2);
+        if (!directory.empty())
+            return directory;
+        return pictures_directory() / "Screenshots";
+    }
+    static bool screenshot(void *data, sh_screenshot_mode mode, const char *output,
+                           const sh_rect *box, char *error, size_t error_size) {
+        auto &self = *static_cast<Runtime *>(data);
+        try {
+            if (find_program("grim").empty() ||
+                (mode == SH_SCREENSHOT_REGION && find_program("slurp").empty()))
+                throw std::runtime_error(mode == SH_SCREENSHOT_REGION
+                                             ? "region screenshots need grim and slurp installed"
+                                             : "screenshots need grim installed");
+            bool copy = self.config.screenshots.clipboard;
+            if (copy && find_program("wl-copy").empty()) {
+                std::cerr << "wl-copy is not installed; the screenshot is saved but not copied\n";
+                copy = false;
+            }
+            bool notify = self.config.screenshots.notify && !find_program("notify-send").empty();
+            auto directory = self.screenshot_directory();
+            std::error_code failure;
+            std::filesystem::create_directories(directory, failure);
+            if (failure)
+                throw std::runtime_error("cannot create " + directory.string() + ": " +
+                                         failure.message());
+            char stamp[64];
+            std::time_t now = std::time(nullptr);
+            std::strftime(stamp, sizeof(stamp), "Screenshot_%Y-%m-%d_%H-%M-%S",
+                          std::localtime(&now));
+            auto file = directory / (std::string(stamp) + ".png");
+            for (int i = 2; std::filesystem::exists(file); ++i)
+                file = directory / (std::string(stamp) + "-" + std::to_string(i) + ".png");
+            std::string target;
+            if (mode == SH_SCREENSHOT_OUTPUT)
+                target = output;
+            else if (mode == SH_SCREENSHOT_WINDOW)
+                target = std::to_string(box->x) + "," + std::to_string(box->y) + " " +
+                         std::to_string(box->width) + "x" + std::to_string(box->height);
+            static constexpr const char *modes[] = {"region", "output", "window"};
+            if (spawn({"/bin/sh", "-c", screenshot_script, "shaode-screenshot", file.string(),
+                       modes[mode], target, copy ? "1" : "0", notify ? "1" : "0"}) < 0)
+                throw std::runtime_error("cannot start /bin/sh");
+            return true;
+        } catch (const std::exception &failure) {
+            std::snprintf(error, error_size, "%s", failure.what());
+            return false;
         }
     }
     static bool reload(void *data) {
@@ -366,8 +480,9 @@ int main(int argc, char **argv) {
             throw std::runtime_error("start --session from a TTY or a display manager, outside an "
                                      "existing graphical session");
         const sh_callbacks callbacks{
-            &runtime,        Runtime::settings, Runtime::key,          Runtime::command,
-            Runtime::reload, Runtime::startup,  Runtime::child_exited, Runtime::opacity};
+            &runtime,           Runtime::settings, Runtime::key,          Runtime::command,
+            Runtime::reload,    Runtime::startup,  Runtime::child_exited, Runtime::opacity,
+            Runtime::screenshot};
         int result = sh_run(&callbacks, mode);
         if (runtime.shell_pid > 0)
             kill(runtime.shell_pid, SIGTERM);

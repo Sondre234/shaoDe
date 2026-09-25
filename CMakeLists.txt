@@ -170,6 +170,11 @@ if(SHAODE_BUILD_COMPOSITOR)
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
             ${EXAMPLE_CONFIG})
         set_tests_properties(tiling_open_smoke PROPERTIES TIMEOUT 60)
+        add_test(NAME screenshot_smoke COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/screenshot_smoke.py
+            $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
+            ${EXAMPLE_CONFIG})
+        set_tests_properties(screenshot_smoke PROPERTIES TIMEOUT 60)
         add_test(NAME output_smoke COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/output_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)

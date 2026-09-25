@@ -34,6 +34,13 @@ enum sh_action {
     SH_FOCUS_RIGHT,
     SH_FOCUS_UP,
     SH_FOCUS_DOWN,
+    SH_SCREENSHOT, /* argument: enum sh_screenshot_mode */
+};
+
+enum sh_screenshot_mode {
+    SH_SCREENSHOT_REGION, /* the user selects it with slurp */
+    SH_SCREENSHOT_OUTPUT, /* the output under the pointer */
+    SH_SCREENSHOT_WINDOW, /* the focused window */
 };
 
 /* Modifier and edge bits intentionally match wlroots, without importing its headers. */
@@ -85,6 +92,7 @@ struct sh_settings {
     bool focus_follows_mouse; /* hovering a window focuses it, without raising it */
 };
 
+struct sh_rect;
 struct sh_callbacks {
     void *userdata;
     const struct sh_settings *(*settings)(void *);
@@ -98,6 +106,11 @@ struct sh_callbacks {
     void (*child_exited)(void *, int pid);
     /* Opacity for a window with this app ID (may be ""), focused or not. */
     float (*opacity)(void *, const char *app_id, bool active);
+    /* Captures the screen in the background: `output` names the output for
+     * SH_SCREENSHOT_OUTPUT, `box` is the window in layout coordinates for SH_SCREENSHOT_WINDOW.
+     * Returns false with a message when it cannot start. */
+    bool (*screenshot)(void *, enum sh_screenshot_mode mode, const char *output,
+                       const struct sh_rect *box, char *error, size_t error_size);
 };
 
 enum sh_backend_mode { SH_BACKEND_NESTED, SH_BACKEND_HEADLESS, SH_BACKEND_SESSION };

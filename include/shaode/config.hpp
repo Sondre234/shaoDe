@@ -17,6 +17,7 @@ struct Binding {
     sh_action action;
     Command command;
     int workspace = 0; // for workspace and move_to_workspace, from 1
+    sh_screenshot_mode screenshot = SH_SCREENSHOT_REGION; // for screenshot
 };
 
 struct Launcher {
@@ -45,6 +46,12 @@ struct ShellConfig {
     std::string text_color = "#edf2fa";
     std::string wallpaper;
     std::vector<Launcher> launchers;
+};
+
+struct ScreenshotConfig {
+    std::string directory; // absolute or "~/..."; empty: $XDG_PICTURES_DIR/Screenshots
+    bool clipboard = true; // also copy the image with wl-copy
+    bool notify = true;    // announce the file with notify-send, when it is installed
 };
 
 struct Config {
@@ -78,6 +85,7 @@ struct Config {
     std::vector<Binding> bindings;
     std::vector<Command> startup;
     ShellConfig shell;
+    ScreenshotConfig screenshots;
     float opacity = 1, inactive_opacity = 1;
     std::vector<WindowRule> window_rules;
 
@@ -89,6 +97,8 @@ struct Config {
 // Maps a Lua/control-socket action name; throws for unknown names.
 sh_action parse_action(const std::string &name);
 bool action_takes_workspace(sh_action action);
+// "region", "output", or "window"; throws for other names.
+sh_screenshot_mode parse_screenshot_mode(const std::string &name);
 
 // Parse into a fresh value; callers replace the active configuration only on success.
 // A configuration's `theme = "FILE"` (relative to `directory`) supplies every setting it omits.

@@ -181,3 +181,15 @@ and wheel paging) against a stand-in control socket, and a headless run with the
 shell on two outputs showed each panel marking its own output's workspace (`grim`).
 Not yet exercised on hardware: pointer drags between monitors, wheel paging with a real
 mouse or touchpad, and the remembered workspaces across a VT switch.
+
+## Screenshot checkpoint
+
+Added 2026-09-25. `config` covers the default Print bindings, the `screenshots` settings, and
+invalid modes and directories. `screenshot_smoke` drives `shaode msg screenshot` in a headless
+session whose `PATH` holds only stand-ins for grim, slurp, wl-copy, and notify-send: it checks
+`grim -o` with the output under the pointer, `grim -g` with the focused window's box, the region
+from slurp, distinct names for screenshots within one second, saving without wl-copy, and the
+errors when grim or slurp is missing. With the real grim in a headless session, the output and
+window modes produced a 1280×720 PNG and a 320×240 crop of the probe window. Not yet exercised:
+the Print keys and slurp's interactive selection in a nested or physical session, the clipboard
+copy, and the notification.
