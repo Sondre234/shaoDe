@@ -127,7 +127,14 @@ struct sh_server {
     struct wl_event_source *waker_timer, *waker_input;
 #endif
 #endif
-    int workspace; // current workspace, from 0
+    /* Each output shows one of its own workspaces (from 0). Kept by output name, so an output
+     * that goes away (all of them do on a VT switch) comes back on the same workspace. */
+    struct {
+        char name[64];
+        int current;
+    } output_workspaces[16];
+    char active_output[64];           // of the last focused window, switched workspace, or click
+    struct wlr_output *target_output; // set while a control request names an output
     struct sh_tiling *tiling;
     bool tiling_enabled;
     bool grab_retile;     // the grabbed window left the tiling to be moved; retile it on drop
@@ -136,6 +143,7 @@ struct sh_server {
 
     int control_fd;
     struct wl_list subscribers; // control clients receiving state changes
+    char sent_state[2048];      // the state they last received
     char control_path[108];
     struct wl_event_source *control_source;
     struct wlr_scene_tree *layer_trees[4];
@@ -229,7 +237,8 @@ struct sh_toplevel {
     struct sh_node node;
     enum sh_action arrangement;
     bool minimized;
-    int workspace;
+    int workspace;   // one of the workspaces of `output`
+    char output[64]; // the output the window was placed on, by name; empty before that
     struct wlr_foreign_toplevel_handle_v1 *foreign;
     /* Window capture: a private scene holding only this window's surfaces, so sharing one
      * window never shows what overlaps it. */
@@ -333,6 +342,8 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
                               uint32_t edges);
 static void create_popup(struct sh_server *server, struct wlr_xdg_popup *popup,
                          struct wlr_scene_tree *parent);
+static struct wlr_output *find_output(struct sh_server *server, const char *name);
+static void follow_output(struct sh_toplevel *toplevel);
 static void lock_output_presented(struct sh_output *output);
 static void notify_subscribers(struct sh_server *server);
 static void request_launcher(struct sh_server *server);
@@ -407,6 +418,7 @@ static void toplevel_configure(struct sh_toplevel *toplevel, int x, int y, int w
     if (toplevel->xsurface) {
         if (width > 0 && height > 0)
             wlr_xwayland_surface_configure(toplevel->xsurface, x, y, width, height);
+        follow_output(toplevel);
         return;
     }
 #endif
@@ -414,6 +426,7 @@ static void toplevel_configure(struct sh_toplevel *toplevel, int x, int y, int w
     const struct wlr_xdg_toplevel_configure *scheduled = &toplevel->xdg_toplevel->scheduled;
     if (scheduled->width != width || scheduled->height != height)
         wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
+    follow_output(toplevel);
 }
 static void toplevel_configure_box(struct sh_toplevel *toplevel, struct wlr_box box) {
     toplevel_configure(toplevel, box.x, box.y, box.width, box.height);
@@ -442,6 +455,7 @@ static void toplevel_set_position(struct sh_toplevel *toplevel, int x, int y) {
         wlr_xwayland_surface_configure(toplevel->xsurface, x, y, toplevel->xsurface->width,
                                        toplevel->xsurface->height);
 #endif
+    follow_output(toplevel);
 }
 /* Tells the client and the taskbar whether the window is maximized, and which edges touch
  * a neighbour or the screen edge. */
@@ -513,19 +527,97 @@ static bool toplevel_accepts_keyboard(struct sh_toplevel *toplevel) {
 #endif
     return true;
 }
-static bool toplevel_visible(struct sh_toplevel *toplevel) {
-    return !toplevel->minimized && toplevel->workspace == toplevel->server->workspace;
+
+/* The current workspace of the output named `name`, which need not be connected. */
+static int *output_workspace(struct sh_server *server, const char *name) {
+    int count = sizeof(server->output_workspaces) / sizeof(server->output_workspaces[0]);
+    int unused = -1, gone = -1;
+    for (int i = 0; i < count; ++i) {
+        const char *known = server->output_workspaces[i].name;
+        if (!strcmp(known, name))
+            return &server->output_workspaces[i].current;
+        if (!known[0] && unused < 0)
+            unused = i;
+        else if (known[0] && gone < 0 && !find_output(server, known))
+            gone = i;
+    }
+    int slot = unused >= 0 ? unused : gone >= 0 ? gone : 0;
+    snprintf(server->output_workspaces[slot].name, sizeof(server->output_workspaces[slot].name),
+             "%s", name);
+    server->output_workspaces[slot].current = 0;
+    return &server->output_workspaces[slot].current;
 }
 
-/* Shows only the current workspace's windows; focus is left to the caller. */
-static void show_workspace(struct sh_server *server, int workspace) {
-    server->workspace = workspace;
+/* A window shows when its output shows its workspace. The output may be gone: its windows
+ * keep their state until they are placed on another output. */
+static bool toplevel_visible(struct sh_toplevel *toplevel) {
+    return !toplevel->minimized &&
+           (!toplevel->output[0] ||
+            toplevel->workspace == *output_workspace(toplevel->server, toplevel->output));
+}
+
+/* Shows each output's current workspace; focus is left to the caller. */
+static void show_workspaces(struct sh_server *server) {
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
         wlr_scene_node_set_enabled(&toplevel->scene_tree->node, toplevel_visible(toplevel));
     }
-    wlr_log(WLR_INFO, "Workspace %d", workspace + 1);
     notify_subscribers(server);
+}
+
+static void set_active_output(struct sh_server *server, const char *name) {
+    if (!name[0] || !strcmp(server->active_output, name))
+        return;
+    snprintf(server->active_output, sizeof(server->active_output), "%s", name);
+    notify_subscribers(server);
+}
+
+static void show_workspace(struct sh_server *server, const char *output, int workspace) {
+    *output_workspace(server, output) = workspace;
+    wlr_log(WLR_INFO, "Workspace %d on %s", workspace + 1, output);
+    show_workspaces(server);
+}
+
+/* The output workspace actions apply to: the one a control request names, else the one last
+ * focused (by focusing a window there, switching its workspace, or clicking on it), else the
+ * one under the pointer. */
+static struct wlr_output *focused_output(struct sh_server *server) {
+    if (server->target_output)
+        return server->target_output;
+    struct wlr_output *output = find_output(server, server->active_output);
+    if (!output)
+        output = wlr_output_layout_output_at(server->output_layout, server->cursor->x,
+                                             server->cursor->y);
+    return output ? output : first_output(server);
+}
+
+/* A window placed on another output joins that output's current workspace. */
+static void set_toplevel_output(struct sh_toplevel *toplevel, struct wlr_output *output) {
+    if (!output || !strcmp(toplevel->output, output->name))
+        return;
+    snprintf(toplevel->output, sizeof(toplevel->output), "%s", output->name);
+    toplevel->workspace = *output_workspace(toplevel->server, output->name);
+    if (toplevel->server->focused_toplevel == toplevel)
+        set_active_output(toplevel->server, output->name);
+    if (toplevel_mapped(toplevel)) {
+        wlr_scene_node_set_enabled(&toplevel->scene_tree->node, toplevel_visible(toplevel));
+        notify_subscribers(toplevel->server);
+    }
+}
+
+/* Floating windows belong to the output their centre is on, wherever they were moved from:
+ * the pointer, a snap, or the client. Tiles belong to the output of their tiling. */
+static void follow_output(struct sh_toplevel *toplevel) {
+#if WLR_HAS_XWAYLAND
+    if (toplevel->unmanaged)
+        return;
+#endif
+    if (toplevel->tiled || !toplevel_mapped(toplevel))
+        return;
+    struct wlr_box box = toplevel_box(toplevel);
+    set_toplevel_output(toplevel, wlr_output_layout_output_at(toplevel->server->output_layout,
+                                                              box.x + box.width / 2.0,
+                                                              box.y + box.height / 2.0));
 }
 
 static void deactivate_toplevel(struct sh_server *server) {
@@ -547,10 +639,10 @@ static void focus_toplevel_raise(struct sh_toplevel *toplevel, bool raise) {
         return;
     struct sh_server *server = toplevel->server;
     struct wlr_seat *seat = server->seat;
-    if (toplevel->workspace != server->workspace) {
+    if (toplevel->output[0] && toplevel->workspace != *output_workspace(server, toplevel->output)) {
         if (server->grabbed_toplevel)
             reset_cursor_mode(server);
-        show_workspace(server, toplevel->workspace);
+        show_workspace(server, toplevel->output, toplevel->workspace);
     }
     deactivate_toplevel(server);
     server->focused_layer = NULL;
@@ -578,6 +670,7 @@ static void focus_toplevel_raise(struct sh_toplevel *toplevel, bool raise) {
     if (keyboard && toplevel_accepts_keyboard(toplevel))
         wlr_seat_keyboard_notify_enter(seat, toplevel_surface(toplevel), keyboard->keycodes,
                                        keyboard->num_keycodes, &keyboard->modifiers);
+    set_active_output(server, toplevel->output);
 }
 
 static void focus_toplevel(struct sh_toplevel *toplevel) { focus_toplevel_raise(toplevel, true); }
@@ -612,6 +705,21 @@ static void focus_previous(struct sh_server *server) {
     }
     deactivate_toplevel(server);
     wlr_seat_keyboard_clear_focus(server->seat);
+}
+
+/* Focuses the topmost visible window on `output`, else nothing. */
+static void focus_top_on(struct sh_server *server, struct wlr_output *output) {
+    server->focused_layer = NULL;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel_visible(toplevel) && find_output(server, toplevel->output) == output) {
+            focus_toplevel(toplevel);
+            return;
+        }
+    }
+    deactivate_toplevel(server);
+    wlr_seat_keyboard_clear_focus(server->seat);
+    notify_subscribers(server);
 }
 
 static void focus_layer(struct sh_layer *layer) {
@@ -676,17 +784,27 @@ static void set_toplevel_workspace(struct sh_toplevel *toplevel, int workspace) 
     toplevel->workspace = workspace;
     if (retile)
         tile_toplevel(toplevel, output, NULL, false);
+    notify_subscribers(toplevel->server);
 }
 
-static void switch_workspace(struct sh_server *server, int workspace) {
+/* Switches only `output`. Focus moves along when it was on that output (or nowhere), so paging
+ * another monitor from its panel leaves the focused window alone. */
+static void switch_workspace(struct sh_server *server, struct wlr_output *output, int workspace) {
     int count = server_settings(server)->workspaces;
-    if (workspace < 0 || workspace >= count || workspace == server->workspace)
+    if (!output || workspace < 0 || workspace >= count ||
+        workspace == *output_workspace(server, output->name))
         return;
     if (server->grabbed_toplevel)
         reset_cursor_mode(server);
-    deactivate_toplevel(server);
-    show_workspace(server, workspace);
-    focus_previous(server);
+    struct sh_toplevel *focused = server->focused_toplevel;
+    bool refocus = !focused || find_output(server, focused->output) == output;
+    if (refocus)
+        deactivate_toplevel(server);
+    show_workspace(server, output->name, workspace);
+    if (refocus) {
+        focus_top_on(server, output);
+        set_active_output(server, output->name);
+    }
 }
 
 static void move_to_workspace(struct sh_server *server, int workspace) {
@@ -697,10 +815,11 @@ static void move_to_workspace(struct sh_server *server, int workspace) {
     if (server->grabbed_toplevel == toplevel)
         reset_cursor_mode(server);
     set_toplevel_workspace(toplevel, workspace);
-    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
-    if (server->focused_toplevel == toplevel) {
+    bool visible = toplevel_visible(toplevel); // a window whose output is gone stays visible
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, visible);
+    if (server->focused_toplevel == toplevel && !visible) {
         deactivate_toplevel(server);
-        focus_previous(server);
+        focus_top_on(server, find_output(server, toplevel->output));
     }
 }
 
@@ -783,17 +902,20 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
             toplevel_close(current);
         break;
     case SH_WORKSPACE:
-        switch_workspace(server, argument - 1);
+        switch_workspace(server, focused_output(server), argument - 1);
         break;
     case SH_MOVE_TO_WORKSPACE:
         move_to_workspace(server, argument - 1);
         break;
     case SH_WORKSPACE_NEXT:
-        switch_workspace(server, (server->workspace + 1) % count);
+    case SH_WORKSPACE_PREV: {
+        struct wlr_output *output = focused_output(server);
+        if (!output)
+            break;
+        int step = action == SH_WORKSPACE_NEXT ? 1 : count - 1;
+        switch_workspace(server, output, (*output_workspace(server, output->name) + step) % count);
         break;
-    case SH_WORKSPACE_PREV:
-        switch_workspace(server, (server->workspace + count - 1) % count);
-        break;
+    }
     case SH_TOGGLE_TILING:
         set_tiling(server, !server->tiling_enabled);
         break;
@@ -1659,6 +1781,10 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         return;
     }
     if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        struct wlr_output *clicked = wlr_output_layout_output_at(
+            server->output_layout, server->cursor->x, server->cursor->y);
+        if (clicked)
+            set_active_output(server, clicked->name);
         double sx, sy;
         struct wlr_surface *surface = NULL;
         struct sh_node *node =
@@ -2000,6 +2126,7 @@ static void arrange_outputs(struct sh_server *server) {
     update_backgrounds(server);
     arrange_layers(server);
     refit_fullscreen(server);
+    notify_subscribers(server); // the list of outputs and their workspaces
 }
 
 /* The mode for `monitor`: its resolution at the refresh closest to the one asked for, or the
@@ -2137,9 +2264,14 @@ static void reload_config(struct sh_server *server) {
         if (toplevel->workspace >= count)
             set_toplevel_workspace(toplevel, count - 1);
     }
-    if (server->workspace >= count) {
+    for (size_t i = 0; i < sizeof(server->output_workspaces) / sizeof(server->output_workspaces[0]);
+         ++i) {
+        if (server->output_workspaces[i].current >= count)
+            server->output_workspaces[i].current = count - 1;
+    }
+    show_workspaces(server);
+    if (server->focused_toplevel && !toplevel_visible(server->focused_toplevel)) {
         deactivate_toplevel(server);
-        show_workspace(server, count - 1);
         focus_previous(server);
     }
     // Gaps, borders, and opacity may have changed.
@@ -2439,9 +2571,12 @@ static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *outpu
                           struct sh_toplevel *target, bool at_cursor) {
     struct sh_server *server = toplevel->server;
     if (!output)
+        output = find_output(server, toplevel->output);
+    if (!output)
         output = toplevel_output(toplevel);
     if (!output || toplevel->tiled)
         return;
+    set_toplevel_output(toplevel, output);
     if (!toplevel->arranged)
         toplevel->restore_box =
             toplevel->fullscreen ? toplevel->fullscreen_restore : toplevel_box(toplevel);
@@ -2810,7 +2945,7 @@ static bool initial_tile_size(struct sh_toplevel *toplevel, int *width, int *hei
         return false;
     const struct sh_settings *settings = server_settings(server);
     struct sh_rect area = gap_area(settings, usable_area(server, output), SH_TILE), rect;
-    if (!sh_tiling_preview(server->tiling, output->name, server->workspace, toplevel, target, true,
+    if (!sh_tiling_preview(server->tiling, output->name, *output_workspace(server, output->name), toplevel, target, true,
                            server->cursor->x, server->cursor->y, area, settings->gap_inner, &rect))
         return false;
     rect = inside_border(server, rect);
@@ -2821,13 +2956,16 @@ static bool initial_tile_size(struct sh_toplevel *toplevel, int *width, int *hei
 
 static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool maximized) {
     struct sh_server *server = toplevel->server;
-    toplevel->workspace = toplevel->server->workspace;
     int offset = 40 + 32 * (wl_list_length(&toplevel->server->toplevels) % 8);
     int x = offset, y = offset;
     bool resize = false;
     struct wlr_box geometry = toplevel_geometry(toplevel);
     int width = geometry.width, height = geometry.height;
     struct wlr_output *output = new_window_output(toplevel);
+    // It opens on that output's current workspace, even if it was mapped there before.
+    toplevel->output[0] = '\0';
+    toplevel->workspace = 0;
+    set_toplevel_output(toplevel, output);
     if (output) {
         struct sh_rect area = usable_area(server, output);
         // Keep newly opened applications reachable inside a small nested output.
@@ -2865,6 +3003,7 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
         set_fullscreen(toplevel, true);
     else if (maximized)
         maximize_toplevel(toplevel, true);
+    notify_subscribers(server); // its workspace holds a window now
 }
 
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
@@ -2889,6 +3028,7 @@ static void unmap_toplevel(struct sh_toplevel *toplevel) {
     wl_list_remove(&toplevel->link);
     if (was_focused)
         focus_previous(toplevel->server);
+    notify_subscribers(toplevel->server);
 }
 
 static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
@@ -3568,20 +3708,51 @@ static void control_reply(int fd, const char *text) {
 static void control_describe_windows(struct sh_server *server, int fd) {
     control_reply(fd, "ok\n");
     struct sh_toplevel *toplevel;
-    // workspace, focused, minimized, tiled, x, y, width, height, app_id, title — one per line.
+    // workspace, focused, minimized, tiled, x, y, width, height, app_id, title, output,
+    // visible — one per line.
     wl_list_for_each_reverse(toplevel, &server->toplevels, link) {
-        char line[1024];
-        const char *app_id = toplevel_app_id(toplevel), *title = toplevel_title(toplevel);
+        char line[1024], app_id[256], title[512];
+        const char *raw_app_id = toplevel_app_id(toplevel), *raw_title = toplevel_title(toplevel);
+        snprintf(app_id, sizeof(app_id), "%s", raw_app_id ? raw_app_id : "");
+        snprintf(title, sizeof(title), "%s", raw_title ? raw_title : "");
+        // Neither can break the columns.
+        for (char *c = app_id; *c; ++c)
+            *c = *c == '\t' || *c == '\n' || *c == '\r' ? ' ' : *c;
+        for (char *c = title; *c; ++c)
+            *c = *c == '\t' || *c == '\n' || *c == '\r' ? ' ' : *c;
         struct wlr_box geometry = toplevel_geometry(toplevel);
-        snprintf(line, sizeof(line), "%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+        snprintf(line, sizeof(line), "%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%d\n",
                  toplevel->workspace + 1, server->focused_toplevel == toplevel, toplevel->minimized,
                  toplevel->tiled, toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
-                 geometry.width, geometry.height, app_id ? app_id : "", title ? title : "");
-        for (char *c = line; c[0] && c[1]; ++c)
-            if (*c == '\n' || *c == '\r')
-                *c = ' ';
+                 geometry.width, geometry.height, app_id, title, toplevel->output,
+                 toplevel_visible(toplevel));
         control_reply(fd, line);
     }
+}
+
+/* The workspaces of `output` that hold windows, as "1,3", or "-" for none. */
+static void occupied_workspaces(struct sh_server *server, struct wlr_output *output, char *text,
+                                size_t size) {
+    unsigned used = 0;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (!strcmp(toplevel->output, output->name) && toplevel->workspace < 32)
+            used |= 1u << toplevel->workspace;
+    }
+    size_t length = 0;
+    text[0] = '\0';
+    for (int i = 0; i < 32 && length < size; ++i) {
+        if (used & 1u << i)
+            length += snprintf(text + length, size - length, "%s%d", length ? "," : "", i + 1);
+    }
+    if (!used)
+        snprintf(text, size, "-");
+}
+
+/* The focused output's workspace, numbered from 1, or 1 without outputs. */
+static int focused_workspace(struct sh_server *server) {
+    struct wlr_output *output = focused_output(server);
+    return output ? *output_workspace(server, output->name) + 1 : 1;
 }
 
 static void control_describe_output(struct sh_server *server, int fd, struct sh_output *output) {
@@ -3610,8 +3781,23 @@ static void control_handle(struct sh_server *server, int fd, const char *request
     }
     if (!strcmp(request, "get workspace")) {
         char reply[32];
-        snprintf(reply, sizeof(reply), "ok\n%d\n", server->workspace + 1);
+        snprintf(reply, sizeof(reply), "ok\n%d\n", focused_workspace(server));
         control_reply(fd, reply);
+        return;
+    }
+    if (!strcmp(request, "get workspaces")) {
+        control_reply(fd, "ok\n");
+        struct wlr_output *focused = focused_output(server);
+        struct sh_output *output;
+        // name, current workspace, focused, workspaces with windows — one line per output.
+        wl_list_for_each_reverse(output, &server->outputs, link) {
+            char line[256], used[128];
+            occupied_workspaces(server, output->wlr_output, used, sizeof(used));
+            snprintf(line, sizeof(line), "%s\t%d\t%d\t%s\n", output->wlr_output->name,
+                     *output_workspace(server, output->wlr_output->name) + 1,
+                     output->wlr_output == focused, used);
+            control_reply(fd, line);
+        }
         return;
     }
     if (!strcmp(request, "get tiling")) {
@@ -3626,6 +3812,23 @@ static void control_handle(struct sh_server *server, int fd, const char *request
         control_reply(fd, "error: the session is locked\n");
         return;
     }
+    // "output NAME ACTION": workspace actions switch that output instead of the focused one.
+    struct wlr_output *target = NULL;
+    if (!strncmp(request, "output ", 7)) {
+        char name[64];
+        const char *action = strchr(request + 7, ' ');
+        int length = action ? (int)(action - request - 7) : 0;
+        snprintf(name, sizeof(name), "%.*s", length, request + 7);
+        target = action ? find_output(server, name) : NULL;
+        if (!target) {
+            char reply[128];
+            snprintf(reply, sizeof(reply), "error: %s\n",
+                     action ? "no such output" : "output needs a name and an action");
+            control_reply(fd, reply);
+            return;
+        }
+        request = action + 1;
+    }
     char error[256] = "";
     int argument = 0;
     enum sh_action action = server->callbacks->command(server->callbacks->userdata, request,
@@ -3636,7 +3839,9 @@ static void control_handle(struct sh_server *server, int fd, const char *request
         control_reply(fd, reply);
         return;
     }
+    server->target_output = target;
     run_action(server, action, argument);
+    server->target_output = NULL;
     control_reply(fd, "ok\n");
 }
 
@@ -3648,21 +3853,40 @@ static void control_client_close(struct sh_control_client *client) {
     free(client);
 }
 
-/* Subscribers get "tiling on|off" and "workspace N" lines, and "launcher OUTPUT" when a
- * binding asks the shell for its application menu; a subscriber that cannot keep up is
- * dropped rather than blocking the compositor. */
-static bool control_send_state(struct sh_control_client *client) {
-    struct sh_server *server = client->server;
-    char state[64];
-    int length = snprintf(state, sizeof(state), "tiling %s\nworkspace %d\n",
-                          server->tiling_enabled ? "on" : "off", server->workspace + 1);
-    return send(client->fd, state, (size_t)length, MSG_NOSIGNAL | MSG_DONTWAIT) == length;
+/* The state subscribers get: "tiling on|off", "workspace N" for the focused output, and
+ * "output NAME N USED" for each output, with its current workspace and those holding windows
+ * ("1,3", or "-"). */
+static void describe_state(struct sh_server *server, char *state, size_t size) {
+    size_t length = snprintf(state, size, "tiling %s\nworkspace %d\n",
+                             server->tiling_enabled ? "on" : "off", focused_workspace(server));
+    struct sh_output *output;
+    wl_list_for_each_reverse(output, &server->outputs, link) {
+        char used[128];
+        occupied_workspaces(server, output->wlr_output, used, sizeof(used));
+        if (length < size)
+            length += snprintf(state + length, size - length, "output %s %d %s\n",
+                               output->wlr_output->name,
+                               *output_workspace(server, output->wlr_output->name) + 1, used);
+    }
+}
+
+/* Subscribers get the state after each change, and "launcher OUTPUT" when a binding asks the
+ * shell for its application menu; a subscriber that cannot keep up is dropped rather than
+ * blocking the compositor. */
+static bool control_send_state(struct sh_control_client *client, const char *state) {
+    size_t length = strlen(state);
+    return send(client->fd, state, length, MSG_NOSIGNAL | MSG_DONTWAIT) == (ssize_t)length;
 }
 
 static void notify_subscribers(struct sh_server *server) {
+    char state[sizeof(server->sent_state)];
+    describe_state(server, state, sizeof(state));
+    if (!strcmp(state, server->sent_state))
+        return;
+    strcpy(server->sent_state, state);
     struct sh_control_client *client, *temporary;
     wl_list_for_each_safe(client, temporary, &server->subscribers, link) {
-        if (!control_send_state(client))
+        if (!control_send_state(client, state))
             control_client_close(client);
     }
 }
@@ -3710,7 +3934,10 @@ static int control_client_readable(int fd, uint32_t mask, void *data) {
     if (newline && !strcmp(client->request, "subscribe")) {
         client->subscribed = true;
         wl_list_insert(&client->server->subscribers, &client->link);
-        if (send(fd, "ok\n", 3, MSG_NOSIGNAL | MSG_DONTWAIT) != 3 || !control_send_state(client))
+        char state[sizeof(client->server->sent_state)];
+        describe_state(client->server, state, sizeof(state));
+        if (send(fd, "ok\n", 3, MSG_NOSIGNAL | MSG_DONTWAIT) != 3 ||
+            !control_send_state(client, state))
             control_client_close(client);
         return 0;
     }

@@ -54,6 +54,8 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
     rootContext()->setContextProperty("shell", &controller);
     rootContext()->setContextProperty("shellView", this);
     rootContext()->setContextProperty("desktopView", desktop);
+    // Matches the compositor's output name, which the workspace state is keyed by.
+    rootContext()->setContextProperty("outputName", screen->name());
 #if SHAODE_LAYER_SHELL
     if (!preview) {
         using W = LayerShellQt::Window;

@@ -172,18 +172,39 @@ void ShellController::subscribe() {
     state_ = new QLocalSocket(this);
     connect(state_, &QLocalSocket::connected, this, [this] { state_->write("subscribe\n"); });
     connect(state_, &QLocalSocket::readyRead, this, [this] {
+        bool outputs = false;
         while (state_->canReadLine()) {
             const auto line = QString::fromUtf8(state_->readLine()).trimmed();
             if (line == "ok")
                 subscribed_ = true;
-            else if (line.startsWith("tiling "))
+            else if (line.startsWith("tiling ")) {
+                // Each state starts with this line and lists every output after it.
                 tiling_ = line == "tiling on";
-            else if (line.startsWith("launcher ")) {
+                nextWorkspaces_.clear();
+                outputs = true;
+            } else if (line.startsWith("output ")) {
+                outputs = true;
+                // output NAME CURRENT OCCUPIED, where OCCUPIED is "1,3" or "-".
+                const auto words = line.split(' ');
+                if (words.size() != 4)
+                    continue;
+                QVariantList occupied;
+                for (const auto &number : words[3].split(',', Qt::SkipEmptyParts))
+                    if (number != "-")
+                        occupied.push_back(number.toInt());
+                nextWorkspaces_[words[1]] =
+                    QVariantMap{{"current", words[2].toInt()}, {"occupied", occupied}};
+                continue;
+            } else if (line.startsWith("launcher ")) {
                 Q_EMIT launcherRequested(line.sliced(9));
                 continue;
             } else
                 continue;
             Q_EMIT tilingChanged();
+        }
+        if (outputs && workspaces_ != nextWorkspaces_) {
+            workspaces_ = nextWorkspaces_;
+            Q_EMIT workspacesChanged();
         }
     });
     connect(state_, &QLocalSocket::disconnected, this, [this] {
@@ -193,15 +214,22 @@ void ShellController::subscribe() {
     state_->connectToServer(path);
 }
 void ShellController::toggleTiling() {
+    request("toggle_tiling\n", "Tiling needs a running shaoDe session.");
+}
+void ShellController::showWorkspace(const QString &output, int number) {
+    if (!output.isEmpty() && number >= 1 && number <= workspaceCount())
+        request(QString("output %1 workspace %2\n").arg(output).arg(number).toUtf8(),
+                "Workspaces need a running shaoDe session.");
+}
+void ShellController::request(const QByteArray &line, const QString &unavailable) {
     const auto path = qEnvironmentVariable("SHAODE_SOCKET");
     if (path.isEmpty()) {
-        report("Tiling needs a running shaoDe session.");
+        report(unavailable);
         return;
     }
     // One request per connection; the new state arrives through the subscription.
     auto *request = new QLocalSocket(this);
-    connect(request, &QLocalSocket::connected, request,
-            [request] { request->write("toggle_tiling\n"); });
+    connect(request, &QLocalSocket::connected, request, [request, line] { request->write(line); });
     connect(request, &QLocalSocket::disconnected, request, &QObject::deleteLater);
     connect(request, &QLocalSocket::errorOccurred, this,
             [this, request](QLocalSocket::LocalSocketError error) {
