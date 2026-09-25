@@ -70,6 +70,12 @@ struct sh_settings {
     /* Drawn outside each window's geometry; placed windows shrink to keep it in their slot. */
     int border_width;
     float border_active[4], border_inactive[4]; /* premultiplied RGBA */
+    /* Pointer devices (libinput only). A negative value keeps the device's own default. */
+    double pointer_speed; /* -1 to 1; used when pointer_speed_set */
+    bool pointer_speed_set;
+    int pointer_accel;        /* -1 default, 0 flat, 1 adaptive */
+    int mouse_natural_scroll; /* -1, 0, 1 */
+    int touchpad_natural_scroll, touchpad_tap, touchpad_dwt;
 };
 
 struct sh_callbacks {

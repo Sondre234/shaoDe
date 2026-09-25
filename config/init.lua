@@ -9,7 +9,12 @@ return {
     version = 1,
     appearance = { background = "#19212e" },
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
-    mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
+    mouse = {
+        modifier = mod, -- modifier + left drag moves; right drag resizes
+        -- Standalone sessions only; unset keeps each device's default:
+        -- speed = 0.0 (-1 to 1), acceleration = "flat" or "adaptive", natural_scroll = false
+    },
+    -- touchpad = { natural_scroll = true, tap_to_click = true, disable_while_typing = true },
     layout = {
         gap = 8, -- sets both; or gap_inner (between windows) and gap_outer (at the edges)
         workspaces = 4,

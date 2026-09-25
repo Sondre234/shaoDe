@@ -94,8 +94,8 @@ shaoDe before it can be imported, **won't** = deliberately not carried over.
 | --- | --- | --- | --- | --- |
 | Keyboard layout, options | `input:kb_layout`, `kb_options` | `keyboard.layout`, `options` | done | no |
 | Repeat rate / delay | `input:repeat_rate`, `repeat_delay` | `keyboard.repeat_rate`, `repeat_delay` | done | no |
-| Pointer speed, acceleration | `input:sensitivity`, `accel_profile` | — | missing | no |
-| Natural scroll, tap-to-click | `input:natural_scroll`, `touchpad:tap-to-click` | — | missing | no |
+| Pointer speed, acceleration | `input:sensitivity`, `accel_profile` | `mouse.speed`, `mouse.acceleration` | done (untested on hardware) | no |
+| Natural scroll, tap-to-click | `input:natural_scroll`, `touchpad:natural_scroll`, `touchpad:tap-to-click`, `touchpad:disable_while_typing` | `mouse.natural_scroll`, `touchpad.*` | done (untested on hardware) | no |
 
 ### Out of scope
 

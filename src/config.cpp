@@ -84,6 +84,17 @@ void boolean(lua_State *L, const char *key, const char *label, bool &target) {
     }
     lua_pop(L, 1);
 }
+// A boolean that may be left unset (-1) to keep a device default.
+void tristate(lua_State *L, const char *key, const char *label, int &target) {
+    bool value = false;
+    lua_getfield(L, -1, key);
+    bool present = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    if (!present)
+        return;
+    boolean(L, key, label, value);
+    target = value;
+}
 bool is_color(const std::string &value, bool alpha = false) {
     return (value.size() == 7 || (alpha && value.size() == 9)) && value[0] == '#' &&
            value.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos;
@@ -347,8 +358,8 @@ Config read(lua_State *L) {
     Config config;
     table(L, -1, "configuration result");
     keys(L, -1,
-         {"version", "appearance", "keyboard", "mouse", "layout", "outputs", "windows", "bindings",
-          "startup", "shell", "xwayland"});
+         {"version", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs", "windows",
+          "bindings", "startup", "shell", "xwayland"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
@@ -369,8 +380,32 @@ Config read(lua_State *L) {
         config.settings.repeat_delay = integer(L, "repeat_delay", 600, 0, 5000);
     }
     lua_pop(L, 1);
-    if (section(L, "mouse", {"modifier"})) {
-        config.settings.mouse_modifier = modifier(field(L, "modifier"));
+    if (section(L, "mouse", {"modifier", "speed", "acceleration", "natural_scroll"})) {
+        lua_getfield(L, -1, "modifier");
+        if (!lua_isnil(L, -1))
+            config.settings.mouse_modifier = modifier(string(L, -1, "modifier"));
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "speed");
+        config.settings.pointer_speed_set = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        config.settings.pointer_speed = number(L, "speed", 0, -1, 1);
+        lua_getfield(L, -1, "acceleration");
+        if (!lua_isnil(L, -1)) {
+            auto profile = string(L, -1, "acceleration");
+            if (profile != "flat" && profile != "adaptive")
+                fail("mouse.acceleration must be \"flat\" or \"adaptive\"");
+            config.settings.pointer_accel = profile == "adaptive";
+        }
+        lua_pop(L, 1);
+        tristate(L, "natural_scroll", "mouse.natural_scroll", config.settings.mouse_natural_scroll);
+    }
+    lua_pop(L, 1);
+    if (section(L, "touchpad", {"natural_scroll", "tap_to_click", "disable_while_typing"})) {
+        tristate(L, "natural_scroll", "touchpad.natural_scroll",
+                 config.settings.touchpad_natural_scroll);
+        tristate(L, "tap_to_click", "touchpad.tap_to_click", config.settings.touchpad_tap);
+        tristate(L, "disable_while_typing", "touchpad.disable_while_typing",
+                 config.settings.touchpad_dwt);
     }
     lua_pop(L, 1);
     if (section(L, "layout", {"gap", "gap_inner", "gap_outer", "workspaces", "tiling"})) {

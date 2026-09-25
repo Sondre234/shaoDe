@@ -22,6 +22,10 @@
 #include <wlr/backend.h>
 #include <wlr/backend/wayland.h>
 #include <wlr/config.h>
+#if WLR_HAS_LIBINPUT_BACKEND
+#include <libinput.h>
+#include <wlr/backend/libinput.h>
+#endif
 #if WLR_HAS_SESSION
 #include <wlr/backend/session.h>
 #endif
@@ -185,6 +189,7 @@ struct sh_server {
     struct wlr_pointer_constraint_v1 *active_constraint; // on the keyboard-focused surface
     struct wl_listener new_constraint, keyboard_focus_change;
     struct wl_list keyboards;
+    struct wl_list pointers; /* struct sh_pointer */
     enum sh_cursor_mode cursor_mode;
     struct sh_toplevel *grabbed_toplevel;
     double grab_x, grab_y;
@@ -292,6 +297,13 @@ struct sh_popup {
     struct sh_server *server;
     struct wlr_xdg_popup *xdg_popup;
     struct wl_listener commit;
+    struct wl_listener destroy;
+};
+
+struct sh_pointer {
+    struct wl_list link;
+    struct sh_server *server;
+    struct wlr_input_device *device;
     struct wl_listener destroy;
 };
 
@@ -829,6 +841,61 @@ static void server_new_keyboard(struct sh_server *server, struct wlr_input_devic
     wl_list_insert(&server->keyboards, &keyboard->link);
 }
 
+/* mouse.* applies to every pointer, touchpad.* to devices that can tap. Unset settings keep
+ * the device's defaults. Only libinput devices (standalone sessions) have any of these. */
+static void configure_pointer(struct sh_server *server, struct wlr_input_device *device) {
+#if WLR_HAS_LIBINPUT_BACKEND
+    if (!wlr_input_device_is_libinput(device))
+        return;
+    struct libinput_device *handle = wlr_libinput_get_device_handle(device);
+    const struct sh_settings *settings = server_settings(server);
+    bool touchpad = libinput_device_config_tap_get_finger_count(handle) > 0;
+    if (libinput_device_config_accel_is_available(handle)) {
+        if (settings->pointer_speed_set)
+            libinput_device_config_accel_set_speed(handle, settings->pointer_speed);
+        if (settings->pointer_accel >= 0)
+            libinput_device_config_accel_set_profile(
+                handle, settings->pointer_accel ? LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE
+                                                : LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT);
+    }
+    int natural = touchpad && settings->touchpad_natural_scroll >= 0
+                      ? settings->touchpad_natural_scroll
+                      : settings->mouse_natural_scroll;
+    if (natural >= 0 && libinput_device_config_scroll_has_natural_scroll(handle))
+        libinput_device_config_scroll_set_natural_scroll_enabled(handle, natural);
+    if (touchpad && settings->touchpad_tap >= 0)
+        libinput_device_config_tap_set_enabled(handle, settings->touchpad_tap
+                                                           ? LIBINPUT_CONFIG_TAP_ENABLED
+                                                           : LIBINPUT_CONFIG_TAP_DISABLED);
+    if (settings->touchpad_dwt >= 0 && libinput_device_config_dwt_is_available(handle))
+        libinput_device_config_dwt_set_enabled(handle, settings->touchpad_dwt
+                                                           ? LIBINPUT_CONFIG_DWT_ENABLED
+                                                           : LIBINPUT_CONFIG_DWT_DISABLED);
+#else
+    (void)server;
+    (void)device;
+#endif
+}
+
+static void pointer_destroy(struct wl_listener *listener, void *data) {
+    struct sh_pointer *pointer = wl_container_of(listener, pointer, destroy);
+    wl_list_remove(&pointer->destroy.link);
+    wl_list_remove(&pointer->link);
+    free(pointer);
+}
+
+static void server_new_pointer(struct sh_server *server, struct wlr_input_device *device) {
+    wlr_cursor_attach_input_device(server->cursor, device);
+    struct sh_pointer *pointer = calloc(1, sizeof(*pointer));
+    if (!pointer)
+        return;
+    pointer->server = server;
+    pointer->device = device;
+    add_listener(&device->events.destroy, &pointer->destroy, pointer_destroy);
+    wl_list_insert(&server->pointers, &pointer->link);
+    configure_pointer(server, device);
+}
+
 static void server_new_input(struct wl_listener *listener, void *data) {
     struct sh_server *server = wl_container_of(listener, server, new_input);
     struct wlr_input_device *device = data;
@@ -837,7 +904,7 @@ static void server_new_input(struct wl_listener *listener, void *data) {
         server_new_keyboard(server, device);
         break;
     case WLR_INPUT_DEVICE_POINTER:
-        wlr_cursor_attach_input_device(server->cursor, device);
+        server_new_pointer(server, device);
         break;
     default:
         break;
@@ -1870,6 +1937,8 @@ static void reload_config(struct sh_server *server) {
         if (!configure_keyboard(server, keyboard->wlr_keyboard))
             wlr_log(WLR_ERROR, "Could not apply reloaded keymap");
     }
+    struct sh_pointer *pointer;
+    wl_list_for_each(pointer, &server->pointers, link) configure_pointer(server, pointer->device);
     // Enable outputs before disabling others, so a swap never leaves none on.
     struct sh_output *output, *temporary;
     wl_list_for_each_safe(output, temporary, &server->disabled_outputs, link)
@@ -3508,6 +3577,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     add_listener(&server.cursor->events.frame, &server.cursor_frame, server_cursor_frame);
 
     wl_list_init(&server.keyboards);
+    wl_list_init(&server.pointers);
     add_listener(&server.backend->events.new_input, &server.new_input, server_new_input);
     server.seat = wlr_seat_create(server.wl_display, "seat0");
     add_listener(&server.seat->events.request_set_cursor, &server.request_cursor,

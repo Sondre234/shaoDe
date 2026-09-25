@@ -115,6 +115,12 @@ Not yet: keyboard focus/swap between neighbouring tiles, per-workspace on/off, a
 keeping floating windows above tiles. Windows tiled on a monitor that is unplugged
 keep their place until it returns.
 
+Pointer devices in a standalone `--session` take `mouse.speed` (-1 to 1),
+`mouse.acceleration` (`"flat"` or `"adaptive"`), and `mouse.natural_scroll`; touchpads also
+take `touchpad.natural_scroll`, `tap_to_click`, and `disable_while_typing`. Unset settings
+keep each device's defaults, and a reload applies changes. Nested sessions get their pointer
+from the host, so these do nothing there.
+
 `layout.gap` sets the space around tiles; `gap_inner` (between windows) and `gap_outer`
 (at the output's edges) set them separately. Hyprland's `gaps_in` is half of `gap_inner`,
 since Hyprland adds it on both sides. The `windows` table draws a border around each window
