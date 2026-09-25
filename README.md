@@ -111,16 +111,21 @@ space back to its neighbour.
 
 - Mod + right drag on a tile, or dragging its edge, moves the split lines around it.
 - Moving a tile (Mod + left drag or its title bar) lifts it out; dropping it splits
-  the tile under the pointer.
+  the tile under the pointer. A window dropped on another monitor joins the tiling
+  there even if snapping or maximizing had floated it; one floated with Super + V stays
+  floating.
 - Dialogs and fixed-size windows float. Super + V (`toggle_floating`) floats
   or tiles the focused window; snapping or maximizing a tile also floats it.
-- Turning tiling off returns every window to its floating position and size.
+- Turning tiling off returns every window to its floating position and size. A window
+  now tiled on another monitor keeps its size and its place relative to that monitor,
+  shrunk and moved to fit inside it.
 - Minimized windows leave the tiling and rejoin it when restored; windows moved to
   another workspace join that workspace's tiling on the same output.
 
 Not yet: keyboard focus/swap between neighbouring tiles, per-workspace on/off, and
 keeping floating windows above tiles. Windows tiled on a monitor that is unplugged
-keep their place until it returns.
+keep their place until it returns; a monitor disabled in the config hands its tiles to
+the nearest one.
 
 Pointer devices in a standalone `--session` take `mouse.speed` (-1 to 1),
 `mouse.acceleration` (`"flat"` or `"adaptive"`), and `mouse.natural_scroll`; touchpads also
