@@ -11,9 +11,18 @@ return {
     keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = { modifier = mod }, -- modifier + left drag moves; right drag resizes
     layout = {
-        gap = 8,
+        gap = 8, -- sets both; or gap_inner (between windows) and gap_outer (at the edges)
         workspaces = 4,
         tiling = false, -- start with automatic tiling; the panel button toggles it
+    },
+    windows = {
+        border_width = 0, -- drawn around each window; tiles shrink to keep it in their slot
+        border_color = "#7da8ff", -- the focused window; #RRGGBBAA also works
+        border_inactive_color = "#404a5c",
+        opacity = 1.0,
+        inactive_opacity = 1.0,
+        -- Per application, by app ID (a regular expression); the first match wins:
+        -- rules = { { app_id = "^firefox$", opacity = 0.9, inactive_opacity = 0.85 } },
     },
     outputs = {
         -- Left to right by connector name; unlisted monitors follow on the right.

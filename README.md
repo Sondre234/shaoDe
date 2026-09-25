@@ -115,6 +115,14 @@ Not yet: keyboard focus/swap between neighbouring tiles, per-workspace on/off, a
 keeping floating windows above tiles. Windows tiled on a monitor that is unplugged
 keep their place until it returns.
 
+`layout.gap` sets the space around tiles; `gap_inner` (between windows) and `gap_outer`
+(at the output's edges) set them separately. Hyprland's `gaps_in` is half of `gap_inner`,
+since Hyprland adds it on both sides. The `windows` table draws a border around each window
+(`border_width`, `border_color` for the focused one, `border_inactive_color`) and sets
+`opacity` and `inactive_opacity`, per application too with `rules` matched against the app
+ID. Fullscreen windows have no border and stay opaque. Rounded corners, blur, and shadows
+need a renderer that wlroots' scene graph does not provide.
+
 Workspaces are shared across outputs; `layout.workspaces` sets how many (1–10).
 The taskbar lists windows from every workspace, and activating one switches to its
 workspace. Window shortcuts act only on the current workspace.

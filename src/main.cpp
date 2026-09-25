@@ -100,6 +100,9 @@ struct Runtime {
     static const sh_settings *settings(void *data) {
         return &static_cast<Runtime *>(data)->config.settings;
     }
+    static float opacity(void *data, const char *app_id, bool active) {
+        return static_cast<Runtime *>(data)->config.window_opacity(app_id, active);
+    }
     static sh_action key(void *data, uint32_t modifiers, uint32_t keysym, int *argument) {
         auto &self = *static_cast<Runtime *>(data);
         auto *binding = self.config.binding(modifiers, keysym);
@@ -294,8 +297,8 @@ int main(int argc, char **argv) {
             throw std::runtime_error("start --session from a TTY or a display manager, outside an "
                                      "existing graphical session");
         const sh_callbacks callbacks{
-            &runtime,        Runtime::settings, Runtime::key,         Runtime::command,
-            Runtime::reload, Runtime::startup,  Runtime::child_exited};
+            &runtime,        Runtime::settings, Runtime::key,          Runtime::command,
+            Runtime::reload, Runtime::startup,  Runtime::child_exited, Runtime::opacity};
         int result = sh_run(&callbacks, mode);
         if (runtime.shell_pid > 0)
             kill(runtime.shell_pid, SIGTERM);

@@ -156,6 +156,10 @@ if(SHAODE_BUILD_COMPOSITOR)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/output_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)
         set_tests_properties(output_smoke PROPERTIES TIMEOUT 60)
+        add_test(NAME window_style_smoke COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/window_style_smoke.py
+            $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)
+        set_tests_properties(window_style_smoke PROPERTIES TIMEOUT 60)
         set(LOCK_XML ${PROTOCOL_DIR}/staging/ext-session-lock/ext-session-lock-v1.xml)
         add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ext-session-lock-v1-client-protocol.h
             COMMAND ${WAYLAND_SCANNER} client-header ${LOCK_XML}

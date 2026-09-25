@@ -97,8 +97,40 @@ int main(int argc, char **argv) {
         rejects("return {layout={workspaces=0}}");
         rejects("return {layout={workspaces=11}}");
         auto computed = shaode::parse_config("local gap = 3; return {layout={gap=gap*2}}");
-        require(computed.settings.gap == 6, "Lua evaluation failed");
+        require(computed.settings.gap_inner == 6 && computed.settings.gap_outer == 6,
+                "Lua evaluation failed");
         rejects("return {layout={gap=-1}}");
+        auto gaps = shaode::parse_config("return {layout={gap=4,gap_outer=10}}");
+        require(gaps.settings.gap_inner == 4 && gaps.settings.gap_outer == 10,
+                "gap_inner/gap_outer not parsed");
+        rejects("return {layout={gap_inner=101}}");
+        auto windows = shaode::parse_config(
+            "return {windows={border_width=2,border_color='#ff000080',"
+            "border_inactive_color='#00ff00',opacity=0.95,inactive_opacity=0.8,"
+            "rules={{app_id='^firefox$',opacity=0.9},{app_id='code',opacity=0.7,"
+            "inactive_opacity=0.6}}}}");
+        const auto &ws = windows.settings;
+        require(ws.border_width == 2 && ws.border_active[0] > 0.50F &&
+                    ws.border_active[0] < 0.51F && ws.border_active[3] > 0.50F &&
+                    ws.border_active[3] < 0.51F && ws.border_inactive[1] == 1.0F &&
+                    ws.border_inactive[3] == 1.0F,
+                "border settings not parsed or not premultiplied");
+        require(windows.window_opacity("firefox", true) == 0.9F &&
+                    windows.window_opacity("firefox", false) == 0.9F &&
+                    windows.window_opacity("code-oss", false) == 0.6F &&
+                    windows.window_opacity("firefox-esr", true) == 0.95F &&
+                    windows.window_opacity("", false) == 0.8F,
+                "window opacity rules mismatch");
+        auto opaque = shaode::parse_config("return {}");
+        require(opaque.window_opacity("x", false) == 1 && opaque.settings.border_width == 0,
+                "window defaults changed");
+        rejects("return {windows={border_width=21}}");
+        rejects("return {windows={border_color='red'}}");
+        rejects("return {windows={opacity=0}}");
+        rejects("return {windows={opacity=1.5}}");
+        rejects("return {windows={rules={{app_id='('}}}}");
+        rejects("return {windows={rules={{opacity=0.5}}}}");
+        rejects("return {windows={rules={{app_id='x',class='y'}}}}");
         rejects("return {keyboard={repeat_rate='25'}}");
         rejects("return {appearance={background='#oops00'}}");
         rejects("return {layuot={gap=2}}");
@@ -144,7 +176,7 @@ int main(int argc, char **argv) {
             config = shaode::parse_config("return {layout={gap=999}}");
         } catch (const std::exception &) {
         }
-        require(config.settings.gap == 8 && config.bindings.size() == 24,
+        require(config.settings.gap_inner == 8 && config.bindings.size() == 24,
                 "failed reload changed active configuration");
         std::cout << "Configuration validation, bindings, and transactional loading passed\n";
     } catch (const std::exception &error) {

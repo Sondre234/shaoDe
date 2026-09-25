@@ -76,16 +76,16 @@ shaoDe before it can be imported, **won't** = deliberately not carried over.
 
 | Setting | Source | shaoDe setting | Status | Importer |
 | --- | --- | --- | --- | --- |
-| Outer gap | `general:gaps_out` | `layout.gap` (one value today) | missing (split) | no |
-| Inner gap | `general:gaps_in` | — | missing | no |
-| Border width | `general:border_size` | — | missing | no |
-| Border colors (active/inactive) | `col.active_border`, `col.inactive_border` | — | missing | no |
-| Gradient borders | `rgba(…) rgba(…) 45deg` | — | missing | no |
-| Corner rounding | `decoration:rounding` | — | missing | no |
-| Active / inactive opacity | `decoration:active_opacity`, `inactive_opacity` | — | missing | no |
-| Per-app opacity | `windowrule = opacity A B, class:…` | — | missing | no |
-| Blur | `decoration:blur` | — | missing | no |
-| Shadows | `decoration:shadow` | — | missing | no |
+| Outer gap | `general:gaps_out` | `layout.gap_outer` | done | no |
+| Inner gap | `general:gaps_in` (×2: Hyprland adds it on both sides) | `layout.gap_inner` | done | no |
+| Border width | `general:border_size` | `windows.border_width` | done | no |
+| Border colors (active/inactive) | `col.active_border`, `col.inactive_border` | `windows.border_color`, `border_inactive_color` | done | no |
+| Gradient borders | `rgba(…) rgba(…) 45deg` | — (the importer takes the first color) | missing | no |
+| Corner rounding | `decoration:rounding` | — | blocked: needs scenefx or a custom renderer | no |
+| Active / inactive opacity | `decoration:active_opacity`, `inactive_opacity` | `windows.opacity`, `inactive_opacity` | done | no |
+| Per-app opacity | `windowrule = opacity A B, class:…` | `windows.rules` (`app_id` regex) | done | no |
+| Blur | `decoration:blur` | — | blocked: needs scenefx or a custom renderer | no |
+| Shadows | `decoration:shadow` | — | blocked: needs scenefx or a custom renderer | no |
 | Animations | `animation`, `bezier` | — | won't (for now) | — |
 
 ### Input

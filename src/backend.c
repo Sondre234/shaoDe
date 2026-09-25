@@ -247,7 +247,9 @@ struct sh_toplevel {
     struct wl_listener x_decorations;
 #endif
     struct wlr_scene_tree *scene_tree;
-    struct wlr_scene_buffer *deco; // window controls; NULL when the client decorates itself
+    struct wlr_scene_buffer *deco;    // window controls; NULL when the client decorates itself
+    struct wlr_scene_rect *border[4]; // top, bottom, left, right; NULL without a border
+    float opacity;                    // last applied to the window's buffers
     struct wl_listener map;
     struct wl_listener unmap;
     struct wl_listener commit;
@@ -315,6 +317,7 @@ static void notify_subscribers(struct sh_server *server);
 static void request_launcher(struct sh_server *server);
 static void refit_fullscreen(struct sh_server *server);
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
+static void refresh_frame(struct sh_toplevel *toplevel);
 static void reload_config(struct sh_server *server);
 static void reset_cursor_mode(struct sh_server *server);
 static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen);
@@ -495,6 +498,7 @@ static void deactivate_toplevel(struct sh_server *server) {
     if (old->foreign)
         wlr_foreign_toplevel_handle_v1_set_activated(old->foreign, false);
     server->focused_toplevel = NULL;
+    refresh_frame(old);
 }
 
 static void focus_toplevel(struct sh_toplevel *toplevel) {
@@ -522,6 +526,7 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
     wl_list_remove(&toplevel->link);
     wl_list_insert(&server->toplevels, &toplevel->link);
     toplevel_set_activated(toplevel, true);
+    refresh_frame(toplevel);
     if (toplevel->foreign) {
         wlr_foreign_toplevel_handle_v1_set_minimized(toplevel->foreign, false);
         wlr_foreign_toplevel_handle_v1_set_activated(toplevel->foreign, true);
@@ -1190,6 +1195,70 @@ static void refresh_decoration(struct sh_toplevel *toplevel) {
                                !toplevel->fullscreen || server->deco_revealed == toplevel);
 }
 
+static void set_buffer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data) {
+    struct sh_toplevel *toplevel = data;
+    if (buffer != toplevel->deco)
+        wlr_scene_buffer_set_opacity(buffer, toplevel->opacity);
+}
+
+/* The border around the window's geometry and its opacity, both following focus. Called on
+ * every commit, since the geometry and the set of surfaces can change with any of them. */
+static void refresh_frame(struct sh_toplevel *toplevel) {
+    if (!toplevel->scene_tree)
+        return;
+#if WLR_HAS_XWAYLAND
+    if (toplevel->unmanaged)
+        return;
+#endif
+    struct sh_server *server = toplevel->server;
+    const struct sh_settings *settings = server_settings(server);
+    bool mapped = toplevel_mapped(toplevel);
+    bool active = server->focused_toplevel == toplevel;
+    const char *app_id = toplevel_app_id(toplevel);
+    float opacity =
+        toplevel->fullscreen || !mapped
+            ? 1
+            : server->callbacks->opacity(server->callbacks->userdata, app_id ? app_id : "", active);
+    // New subsurfaces start opaque, so a translucent window is revisited on every commit.
+    if (opacity != toplevel->opacity || opacity < 1) {
+        toplevel->opacity = opacity;
+        wlr_scene_node_for_each_buffer(&toplevel->scene_tree->node, set_buffer_opacity, toplevel);
+    }
+
+    // xdg-shell windows keep their scene tree while unmapped; the border must not.
+    int b = settings->border_width;
+    bool shown = b > 0 && !toplevel->fullscreen && mapped;
+    for (int i = 0; i < 4; ++i) {
+        if (!shown) {
+            if (toplevel->border[i])
+                wlr_scene_node_destroy(&toplevel->border[i]->node);
+            toplevel->border[i] = NULL;
+            continue;
+        }
+        const float *color = active ? settings->border_active : settings->border_inactive;
+        if (!toplevel->border[i])
+            toplevel->border[i] = wlr_scene_rect_create(toplevel->scene_tree, 1, 1, color);
+        if (!toplevel->border[i])
+            return;
+        wlr_scene_rect_set_color(toplevel->border[i], color);
+    }
+    if (!shown)
+        return;
+    // The scene tree's origin is the top-left corner of the window geometry.
+    struct wlr_box g = toplevel_geometry(toplevel);
+    const struct wlr_box sides[4] = {{-b, -b, g.width + 2 * b, b},
+                                     {-b, g.height, g.width + 2 * b, b},
+                                     {-b, 0, b, g.height},
+                                     {g.width, 0, b, g.height}};
+    for (int i = 0; i < 4; ++i) {
+        wlr_scene_node_set_position(&toplevel->border[i]->node, sides[i].x, sides[i].y);
+        wlr_scene_rect_set_size(toplevel->border[i], sides[i].width, sides[i].height);
+        wlr_scene_node_raise_to_top(&toplevel->border[i]->node);
+    }
+    if (toplevel->deco)
+        wlr_scene_node_raise_to_top(&toplevel->deco->node);
+}
+
 static void forget_decoration(struct sh_toplevel *toplevel) {
     struct sh_server *server = toplevel->server;
     if (server->deco_hovered == toplevel)
@@ -1819,7 +1888,8 @@ static void reload_config(struct sh_server *server) {
         show_workspace(server, count - 1);
         focus_previous(server);
     }
-    // The gap may have changed.
+    // Gaps, borders, and opacity may have changed.
+    wl_list_for_each(toplevel, &server->toplevels, link) refresh_frame(toplevel);
     wl_list_for_each(output, &server->outputs, link) reflow_output(server, output->wlr_output);
 }
 
@@ -1880,9 +1950,29 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     arrange_outputs(server);
 }
 
+/* Layouts put their gap at the edges as well as between windows. Laying out with gap_inner
+ * in an area grown or shrunk by the difference leaves gap_outer at the edges. Maximized
+ * windows ignore gaps. */
+static struct sh_rect gap_area(const struct sh_settings *settings, struct sh_rect area,
+                               enum sh_action action) {
+    if (action == SH_MAXIMIZE)
+        return area;
+    int d = settings->gap_outer - settings->gap_inner;
+    return (struct sh_rect){area.x + d, area.y + d, area.width - 2 * d, area.height - 2 * d};
+}
+
+/* Placed windows keep their border inside their slot. */
+static struct sh_rect inside_border(struct sh_server *server, struct sh_rect rect) {
+    int b = server_settings(server)->border_width;
+    if (rect.width <= 2 * b || rect.height <= 2 * b)
+        return rect;
+    return (struct sh_rect){rect.x + b, rect.y + b, rect.width - 2 * b, rect.height - 2 * b};
+}
+
 /* Preserve the original floating rectangle across repeated snap operations. */
 static void place_toplevel(struct sh_toplevel *toplevel, enum sh_action action,
                            struct sh_rect target) {
+    target = inside_border(toplevel->server, target);
     if (!toplevel->arranged)
         toplevel->restore_box = toplevel_box(toplevel);
     toplevel->arranged = true;
@@ -1940,8 +2030,9 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     struct wlr_output *output = toplevel_output(focused);
     if (!output)
         return;
-    struct sh_rect area = usable_area(server, output), target;
-    int gap = server_settings(server)->gap;
+    const struct sh_settings *settings = server_settings(server);
+    struct sh_rect area = gap_area(settings, usable_area(server, output), action), target;
+    int gap = settings->gap_inner;
     if (action != SH_TILE) {
         if (sh_placement(action, area, gap, 0, 1, &target))
             place_toplevel(focused, action, target);
@@ -1961,6 +2052,7 @@ static void place_tiled(void *data, void *window, struct sh_rect rect) {
     if (toplevel->fullscreen)
         return; // It returns to its tile when it leaves fullscreen.
     toplevel_set_states(toplevel, false, ALL_EDGES);
+    rect = inside_border(toplevel->server, rect);
     toplevel_configure(toplevel, rect.x, rect.y, rect.width, rect.height);
 }
 
@@ -1983,11 +2075,13 @@ static void reflow_output(struct sh_server *server, struct wlr_output *output) {
             if (!reflows(toplevel, workspace, output))
                 continue;
             enum sh_action action = toplevel->arrangement;
-            if (sh_placement(action, area, settings->gap, action == SH_TILE ? index++ : 0,
-                             action == SH_TILE ? count : 1, &target))
+            if (sh_placement(action, gap_area(settings, area, action), settings->gap_inner,
+                             action == SH_TILE ? index++ : 0, action == SH_TILE ? count : 1,
+                             &target))
                 place_toplevel(toplevel, action, target);
         }
-        sh_tiling_arrange(server->tiling, output->name, workspace, area, settings->gap, place_tiled,
+        sh_tiling_arrange(server->tiling, output->name, workspace,
+                          gap_area(settings, area, SH_TILE), settings->gap_inner, place_tiled,
                           NULL);
     }
 }
@@ -2404,6 +2498,7 @@ static void unmap_toplevel(struct sh_toplevel *toplevel) {
     forget_decoration(toplevel);
 
     toplevel->fullscreen = false;
+    refresh_frame(toplevel);
     untile_toplevel(toplevel, false);
     bool was_focused = toplevel->server->focused_toplevel == toplevel;
     if (was_focused)
@@ -2424,6 +2519,8 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 
     if (toplevel->xdg_toplevel->base->initial_commit) {
         wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+    } else if (toplevel->xdg_toplevel->base->surface->mapped) {
+        refresh_frame(toplevel);
     }
 }
 
@@ -2584,6 +2681,7 @@ static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen) {
     if (server->focused_toplevel == toplevel || fullscreen)
         focus_toplevel(toplevel);
     refresh_decoration(toplevel);
+    refresh_frame(toplevel);
 }
 
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
@@ -2740,6 +2838,8 @@ static void xwayland_set_geometry(struct wl_listener *listener, void *data) {
     if (toplevel->unmanaged && toplevel->scene_tree)
         wlr_scene_node_set_position(&toplevel->scene_tree->node, toplevel->xsurface->x,
                                     toplevel->xsurface->y);
+    else if (xwayland_managed(toplevel))
+        refresh_frame(toplevel);
 }
 
 static void xwayland_request_activate(struct wl_listener *listener, void *data) {
@@ -3030,9 +3130,8 @@ static void control_describe_windows(struct sh_server *server, int fd) {
         struct wlr_box geometry = toplevel_geometry(toplevel);
         snprintf(line, sizeof(line), "%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
                  toplevel->workspace + 1, server->focused_toplevel == toplevel, toplevel->minimized,
-                 toplevel->tiled, toplevel->scene_tree->node.x + geometry.x,
-                 toplevel->scene_tree->node.y + geometry.y, geometry.width, geometry.height,
-                 app_id ? app_id : "", title ? title : "");
+                 toplevel->tiled, toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
+                 geometry.width, geometry.height, app_id ? app_id : "", title ? title : "");
         for (char *c = line; c[0] && c[1]; ++c)
             if (*c == '\n' || *c == '\r')
                 *c = ' ';

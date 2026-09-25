@@ -53,7 +53,8 @@ struct sh_settings {
     uint32_t mouse_modifier;
     int repeat_rate;
     int repeat_delay;
-    int gap;
+    int gap_inner; /* between neighbouring windows */
+    int gap_outer; /* between windows and the edges of the usable area */
     char keyboard_layout[128];
     char keyboard_options[128];
     bool xwayland; /* read at startup; changing it needs a restart */
@@ -66,6 +67,9 @@ struct sh_settings {
     char primary_output[32];
     struct sh_monitor monitors[8];
     int monitor_count;
+    /* Drawn outside each window's geometry; placed windows shrink to keep it in their slot. */
+    int border_width;
+    float border_active[4], border_inactive[4]; /* premultiplied RGBA */
 };
 
 struct sh_callbacks {
@@ -79,6 +83,8 @@ struct sh_callbacks {
     bool (*reload)(void *);
     void (*startup)(void *);
     void (*child_exited)(void *, int pid);
+    /* Opacity for a window with this app ID (may be ""), focused or not. */
+    float (*opacity)(void *, const char *app_id, bool active);
 };
 
 enum sh_backend_mode { SH_BACKEND_NESTED, SH_BACKEND_HEADLESS, SH_BACKEND_SESSION };

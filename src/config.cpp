@@ -88,6 +88,15 @@ bool is_color(const std::string &value, bool alpha = false) {
     return (value.size() == 7 || (alpha && value.size() == 9)) && value[0] == '#' &&
            value.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos;
 }
+// #RRGGBB or #RRGGBBAA as premultiplied RGBA.
+void premultiplied(const std::string &value, const char *label, float (&target)[4]) {
+    if (!is_color(value, true))
+        fail(std::string(label) + " must be #RRGGBB or #RRGGBBAA");
+    float alpha = value.size() == 9 ? std::stoi(value.substr(7, 2), nullptr, 16) / 255.0F : 1.0F;
+    for (size_t i = 0; i < 3; ++i)
+        target[i] = std::stoi(value.substr(1 + 2 * i, 2), nullptr, 16) / 255.0F * alpha;
+    target[3] = alpha;
+}
 // Pushes the optional table `name`, checking its keys; returns false when it is absent. The
 // caller pops it either way.
 bool section(lua_State *L, const char *name, std::initializer_list<std::string_view> allowed) {
@@ -288,6 +297,47 @@ void read_monitors(lua_State *L, sh_settings &settings) {
     }
     lua_pop(L, 1);
 }
+void read_windows(lua_State *L, Config &config) {
+    if (!section(L, "windows",
+                 {"border_width", "border_color", "border_inactive_color", "opacity",
+                  "inactive_opacity", "rules"})) {
+        lua_pop(L, 1);
+        return;
+    }
+    config.settings.border_width = integer(L, "border_width", 0, 0, 20);
+    for (auto [key, target] : {std::pair{"border_color", &config.settings.border_active},
+                               {"border_inactive_color", &config.settings.border_inactive}}) {
+        lua_getfield(L, -1, key);
+        if (!lua_isnil(L, -1))
+            premultiplied(string(L, -1, key), key, *target);
+        lua_pop(L, 1);
+    }
+    config.opacity = static_cast<float>(number(L, "opacity", 1, 0.05, 1));
+    config.inactive_opacity =
+        static_cast<float>(number(L, "inactive_opacity", config.opacity, 0.05, 1));
+    lua_getfield(L, -1, "rules");
+    if (!lua_isnil(L, -1)) {
+        auto size = array_size(L, -1, 256);
+        for (size_t i = 1; i <= size; ++i) {
+            lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
+            table(L, -1, "window rule");
+            keys(L, -1, {"app_id", "opacity", "inactive_opacity"});
+            WindowRule rule;
+            rule.app_id = field(L, "app_id");
+            try {
+                rule.pattern = std::regex(rule.app_id, std::regex::ECMAScript);
+            } catch (const std::regex_error &) {
+                fail("app_id '" + rule.app_id + "' is not a valid regular expression");
+            }
+            rule.opacity = static_cast<float>(number(L, "opacity", 1, 0.05, 1));
+            rule.inactive_opacity =
+                static_cast<float>(number(L, "inactive_opacity", rule.opacity, 0.05, 1));
+            config.window_rules.push_back(std::move(rule));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 2);
+}
 void instruction_limit(lua_State *L, lua_Debug *) {
     auto *remaining = static_cast<int *>(lua_getextraspace(L));
     if (--*remaining <= 0)
@@ -297,8 +347,8 @@ Config read(lua_State *L) {
     Config config;
     table(L, -1, "configuration result");
     keys(L, -1,
-         {"version", "appearance", "keyboard", "mouse", "layout", "outputs", "bindings", "startup",
-          "shell", "xwayland"});
+         {"version", "appearance", "keyboard", "mouse", "layout", "outputs", "windows", "bindings",
+          "startup", "shell", "xwayland"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
@@ -323,8 +373,11 @@ Config read(lua_State *L) {
         config.settings.mouse_modifier = modifier(field(L, "modifier"));
     }
     lua_pop(L, 1);
-    if (section(L, "layout", {"gap", "workspaces", "tiling"})) {
-        config.settings.gap = integer(L, "gap", 8, 0, 100);
+    if (section(L, "layout", {"gap", "gap_inner", "gap_outer", "workspaces", "tiling"})) {
+        // gap sets both; gap_inner and gap_outer override it.
+        int gap = integer(L, "gap", 8, 0, 100);
+        config.settings.gap_inner = integer(L, "gap_inner", gap, 0, 100);
+        config.settings.gap_outer = integer(L, "gap_outer", gap, 0, 100);
         boolean(L, "tiling", "layout.tiling", config.settings.tiling);
         config.settings.workspaces = integer(L, "workspaces", 4, 1, 10);
     }
@@ -358,6 +411,7 @@ Config read(lua_State *L) {
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
+    read_windows(L, config);
     lua_getfield(L, -1, "bindings");
     if (!lua_isnil(L, -1)) {
         auto size = array_size(L, -1, 512);
@@ -462,6 +516,13 @@ sh_action parse_action(const std::string &name) {
 
 bool action_takes_workspace(sh_action action) {
     return action == SH_WORKSPACE || action == SH_MOVE_TO_WORKSPACE;
+}
+
+float Config::window_opacity(const std::string &app_id, bool active) const {
+    for (const auto &rule : window_rules)
+        if (std::regex_search(app_id, rule.pattern))
+            return active ? rule.opacity : rule.inactive_opacity;
+    return active ? opacity : inactive_opacity;
 }
 
 const Binding *Config::binding(uint32_t modifiers, uint32_t keysym) const {
