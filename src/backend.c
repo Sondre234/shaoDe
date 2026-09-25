@@ -2660,8 +2660,14 @@ static void untile_toplevel(struct sh_toplevel *toplevel, bool restore) {
     toplevel->arranged = !restore;
     toplevel->arrangement = SH_NONE;
     // The floating geometry was saved where the window entered the tiling, maybe elsewhere.
-    if (restore)
+    // A window that opened tiled has no floating size: it floats where its tile is now.
+    if (restore && (toplevel->restore_box.width <= 0 || toplevel->restore_box.height <= 0)) {
+        struct wlr_box tile = toplevel_box(toplevel);
+        toplevel->restore_box.x = tile.x;
+        toplevel->restore_box.y = tile.y;
+    } else if (restore) {
         toplevel->restore_box = rebase_box(server, toplevel->restore_box, output);
+    }
     if (restore && toplevel->fullscreen) {
         toplevel->fullscreen_restore = toplevel->restore_box;
     } else if (restore) {
