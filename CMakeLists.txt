@@ -80,7 +80,7 @@ if(SHAODE_BUILD_COMPOSITOR)
         ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml
         ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h
         DEPENDS ${PROTOCOL_DIR}/stable/xdg-shell/xdg-shell.xml)
-    add_executable(shaode src/main.cpp src/backend.c src/decoration.c src/animation.c
+    add_executable(shaode src/main.cpp src/backend.c src/decoration.c src/animation.c src/sleep.c
         ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h ${WLR_PROTOCOL_HEADERS})
     target_include_directories(shaode PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_definitions(shaode PRIVATE WLR_USE_UNSTABLE)
@@ -89,6 +89,17 @@ if(SHAODE_BUILD_COMPOSITOR)
         SHAODE_DEFAULT_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/shaode/init.lua")
     target_compile_options(shaode PRIVATE -Wall -Wextra -Wno-unused-parameter)
     target_link_libraries(shaode PRIVATE shaode_config PkgConfig::WLROOTS PkgConfig::WAYLAND m)
+    # A standalone session keeps the machine awake through logind while it is on screen.
+    pkg_search_module(SDBUS IMPORTED_TARGET libsystemd libelogind basu)
+    if(SDBUS_FOUND)
+        string(TOUPPER ${SDBUS_MODULE_NAME} SHAODE_SDBUS)
+        string(REPLACE "LIB" "" SHAODE_SDBUS ${SHAODE_SDBUS})
+        target_compile_definitions(shaode PRIVATE SHAODE_SDBUS_${SHAODE_SDBUS}=1)
+        target_link_libraries(shaode PRIVATE PkgConfig::SDBUS)
+    else()
+        message(STATUS "No sd-bus (libsystemd, libelogind, basu); other desktops may suspend "
+            "the machine while shaoDe is on screen")
+    endif()
     # X11 support follows the wlroots build; the XWM waker needs xcb directly.
     find_file(SHAODE_WLR_CONFIG_H wlr/config.h PATHS ${WLROOTS_INCLUDE_DIRS} NO_DEFAULT_PATH)
     file(READ ${SHAODE_WLR_CONFIG_H} SHAODE_WLR_CONFIG)
