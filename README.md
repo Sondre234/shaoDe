@@ -93,8 +93,11 @@ it, makes it fullscreen; dragging a fullscreen window away restores its earlier 
 window focuses it without raising it (`mouse.focus_follows = false` turns this off), except
 while dragging, while a menu or popup is open, or while a panel or launcher has the keyboard.
 
-Limitations: snapping is keyboard-driven, without edge-drag previews. Fullscreen covers the panel while the window is focused;
-focusing another window lowers it behind the panel until it is refocused. Window
+The panel and other bars stay hidden on a monitor showing a fullscreen window, even after
+another window takes focus, until the window leaves fullscreen or its workspace is switched
+away; the panel still shows while its launcher or a menu is open.
+
+Limitations: snapping is keyboard-driven, without edge-drag previews. Window
 placement during interactive resize is immediate, without waiting for the
 client's next buffer.
 
@@ -195,7 +198,9 @@ A control socket runs any Lua action from scripts or other tools:
 `on` or `off`, `shaode msg get outputs` prints one tab-separated line per monitor (name,
 enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
 `shaode msg get windows` prints one tab-separated line per window:
-workspace, focused, minimized, tiled, x, y, width, height, app ID, and title. A client
+workspace, focused, minimized, tiled, x, y, width, height, app ID, and title;
+`shaode msg get layers` prints one per panel or other layer-shell surface: namespace, output,
+layer (0 background to 3 overlay), and whether it is shown. A client
 that sends `subscribe` keeps its connection and receives `tiling on|off` and
 `workspace N` lines after every change, plus `launcher OUTPUT` when the `launcher` action
 (Super + R) asks the panel on that monitor to open or close its application menu; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
