@@ -1,0 +1,8 @@
+@import "colors.css";
+* { font-family: "Fira Sans", sans-serif; font-size: 10pt; }
+window#waybar {
+    background: alpha(@base, 0.5);
+    color: @text;
+    border-radius: 6px;
+}
+#clock { color: red; }

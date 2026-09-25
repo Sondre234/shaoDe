@@ -1,0 +1,8 @@
+/* HyDE style: the bar's look sits on the box inside a transparent window. */
+@import "../../.cache/hyde/wallbash/gtk.css";
+window#waybar, window#waybar > box { color: @wallbash_txt1; background: transparent; }
+window#waybar > box {
+    background-color: rgba(28, 13, 24, 0.80);
+    background-image: url("hearts.png");
+    border-radius: 16px;
+}

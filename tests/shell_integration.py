@@ -15,7 +15,10 @@ compositor, shell, probe, example = (str(Path(p).resolve()) for p in sys.argv[1:
 with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
     root = Path(directory)
     config = root / "init.lua"
+    # The example leaves the bar's look to theme.lua; spell it out so it can be edited here.
     source = Path(example).read_text()
+    for setting in ("panel_height", "panel_position", "panel_margin", "panel_radius"):
+        source = source.replace(f"-- {setting} =", f"{setting} =")
     config.write_text(source)
     compositor_log, shell_log = root / "compositor.log", root / "shell.log"
     env = dict(os.environ, XDG_RUNTIME_DIR=directory, WLR_RENDERER="pixman",

@@ -1,0 +1,7 @@
+// A plain Waybar config, one bar as an object.
+{
+    "position": "bottom",
+    "height": 30,
+    "margin": "4 8", /* top and bottom, left and right */
+    "modules-left": ["hyprland/workspaces",],
+}

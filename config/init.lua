@@ -7,8 +7,12 @@ local mod = "Super"
 
 return {
     version = 1,
-    appearance = { background = "#19212e" },
-    keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
+    -- `shaode import ~/.config` writes theme.lua from Hyprland, Waybar, wallbash, or pywal
+    -- files. It fills in whatever this file leaves out, so the look settings below are
+    -- comments showing their defaults; set one here to override the import.
+    theme = "theme.lua",
+    -- appearance = { background = "#19212e" },
+    -- keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = {
         modifier = mod, -- modifier + left drag moves; right drag resizes
         -- Standalone sessions only; unset keeps each device's default:
@@ -16,16 +20,16 @@ return {
     },
     -- touchpad = { natural_scroll = true, tap_to_click = true, disable_while_typing = true },
     layout = {
-        gap = 8, -- sets both; or gap_inner (between windows) and gap_outer (at the edges)
+        -- gap = 8, -- sets both; or gap_inner (between windows) and gap_outer (at the edges)
         workspaces = 4,
         tiling = false, -- start with automatic tiling; the panel button toggles it
     },
     windows = {
-        border_width = 0, -- drawn around each window; tiles shrink to keep it in their slot
-        border_color = "#7da8ff", -- the focused window; #RRGGBBAA also works
-        border_inactive_color = "#404a5c",
-        opacity = 1.0,
-        inactive_opacity = 1.0,
+        -- border_width = 0, -- drawn around each window; tiles shrink to keep it in their slot
+        -- border_color = "#7da8ff", -- the focused window; #RRGGBBAA also works
+        -- border_inactive_color = "#404a5c",
+        -- opacity = 1.0,
+        -- inactive_opacity = 1.0,
         -- Per application, by app ID (a regular expression); the first match wins:
         -- rules = { { app_id = "^firefox$", opacity = 0.9, inactive_opacity = 0.85 } },
     },
@@ -40,16 +44,16 @@ return {
     xwayland = true, -- run X11 applications; Xwayland starts on first use (restart to change)
     shell = {
         enabled = true,
-        panel_height = 52,
-        panel_position = "bottom", -- or "top"
-        panel_margin = 0, -- or { top = 8, right = 12, bottom = 0, left = 12 } for a floating bar
-        panel_radius = 0,
-        font = "", -- family name; empty keeps the default
-        font_size = 12,
-        accent = "#7da8ff",
-        panel_color = "#151e2c", -- #RRGGBBAA makes it translucent
-        text_color = "#edf2fa",
-        wallpaper = "", -- absolute path, or relative to this configuration file
+        -- panel_height = 52,
+        -- panel_position = "bottom", -- or "top"
+        -- panel_margin = 0, -- or { top = 8, right = 12, bottom = 0, left = 12 } to float
+        -- panel_radius = 0,
+        -- font = "", -- family name; empty keeps the default
+        -- font_size = 12,
+        -- accent = "#7da8ff",
+        -- panel_color = "#151e2c", -- #RRGGBBAA makes it translucent
+        -- text_color = "#edf2fa",
+        -- wallpaper = "", -- absolute path, or relative to this configuration file
         launchers = {
             { name = "Terminal", icon = "utilities-terminal", command = { "kitty" } },
             { name = "Home", icon = "user-home", command = { "xdg-open", "." } },

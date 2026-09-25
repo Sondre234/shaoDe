@@ -3,6 +3,7 @@
 
 #include "shaode/backend.h"
 #include <filesystem>
+#include <optional>
 #include <regex>
 #include <string>
 #include <vector>
@@ -47,7 +48,7 @@ struct ShellConfig {
 };
 
 struct Config {
-    sh_settings settings{.background = {0.10F, 0.13F, 0.18F, 1.0F},
+    sh_settings settings{.background = {25 / 255.0F, 33 / 255.0F, 46 / 255.0F, 1.0F},
                          .mouse_modifier = SH_ALT,
                          .repeat_rate = 25,
                          .repeat_delay = 600,
@@ -89,6 +90,11 @@ sh_action parse_action(const std::string &name);
 bool action_takes_workspace(sh_action action);
 
 // Parse into a fresh value; callers replace the active configuration only on success.
+// A configuration's `theme = "FILE"` (relative to `directory`) supplies every setting it omits.
 Config load_config(const std::filesystem::path &path);
-Config parse_config(const std::string &source, const std::string &name = "config");
+Config parse_config(const std::string &source, const std::string &name = "config",
+                    const std::filesystem::path &directory = {});
+// Settings, as "shell.accent", that the configuration at `path` sets itself although its theme
+// file sets them too. Nothing when the configuration names no theme.
+std::optional<std::vector<std::string>> shadowed_settings(const std::filesystem::path &path);
 } // namespace shaode

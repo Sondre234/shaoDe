@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaode/config.hpp"
+#include "shaode/import.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <iterator>
 #include <signal.h>
@@ -174,12 +176,15 @@ struct Runtime {
             spawn(self.extra_command);
     }
 };
-std::filesystem::path default_config() {
-    std::filesystem::path personal;
+std::filesystem::path personal_config() {
     if (const auto *xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
-        personal = std::filesystem::path(xdg) / "shaode/init.lua";
-    else if (const auto *home = std::getenv("HOME"); home && *home)
-        personal = std::filesystem::path(home) / ".config/shaode/init.lua";
+        return std::filesystem::path(xdg) / "shaode/init.lua";
+    if (const auto *home = std::getenv("HOME"); home && *home)
+        return std::filesystem::path(home) / ".config/shaode/init.lua";
+    return {};
+}
+std::filesystem::path default_config() {
+    auto personal = personal_config();
     if (!personal.empty() && std::filesystem::exists(personal))
         return personal;
     if (std::filesystem::exists(SHAODE_DEFAULT_CONFIG))
@@ -232,6 +237,66 @@ int send_message(int argc, char **argv) {
         std::cerr << "shaode: " << (reply.empty() ? "no reply\n" : reply);
     return ok ? 0 : 1;
 }
+/* `shaode import [--config PATH] [--dry-run] DIR` writes theme.lua beside the configuration. */
+int import_dotfiles(int argc, char **argv) {
+    std::filesystem::path config, source;
+    bool dry_run = false;
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--config" && i + 1 < argc)
+            config = argv[++i];
+        else if (arg == "--dry-run")
+            dry_run = true;
+        else if (source.empty() && !arg.starts_with("-"))
+            source = arg;
+        else
+            throw std::runtime_error("usage: shaode import [--config PATH] [--dry-run] DIR");
+    }
+    if (source.empty())
+        throw std::runtime_error("usage: shaode import [--config PATH] [--dry-run] DIR");
+    if (config.empty())
+        config = personal_config();
+    if (config.empty())
+        throw std::runtime_error("cannot tell where the configuration lives; pass --config PATH");
+    auto result = shaode::import_dotfiles(source);
+    if (dry_run) {
+        std::cout << result.theme;
+        std::cerr << "Would import " << result.imported << " settings:\n" << result.report;
+        return 0;
+    }
+    config = std::filesystem::absolute(config);
+    auto target = config.parent_path() / "theme.lua";
+    std::filesystem::create_directories(target.parent_path());
+    auto temporary = target;
+    temporary += ".new";
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        file << result.theme;
+        if (!file.flush())
+            throw std::runtime_error("cannot write " + temporary.string());
+    }
+    std::filesystem::rename(temporary, target);
+    std::cout << "Wrote " << result.imported << " settings to " << target.string() << ":\n"
+              << result.report;
+    if (!std::filesystem::exists(config)) {
+        std::cout << "\nThere is no " << config.string()
+                  << " yet. Copy the default configuration there; it loads theme.lua.\n";
+        return 0;
+    }
+    auto shadowed = shaode::shadowed_settings(config);
+    if (!shadowed)
+        std::cout << "\nAdd  theme = \"theme.lua\",  to " << config.string() << " to use it.\n";
+    else if (!shadowed->empty()) {
+        std::cout << "\n"
+                  << config.string()
+                  << " sets these itself, so they override the import; delete them there to "
+                     "use the imported values:\n";
+        for (const auto &name : *shadowed)
+            std::cout << "  " << name << '\n';
+    }
+    (void)shaode::load_config(config);
+    return 0;
+}
 void usage() {
     std::cout
         << "Usage: shaode [--config PATH] [--check-config] [--headless | --session] "
@@ -242,7 +307,9 @@ void usage() {
            "--no-shell disables automatic shell startup; headless mode never starts it.\n"
            "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n"
            "shaode msg ACTION [ARGUMENT] runs an action in the running session;\n"
-           "shaode msg get workspace|tiling|windows|outputs prints its state.\n";
+           "shaode msg get workspace|tiling|windows|outputs prints its state.\n"
+           "shaode import [--config PATH] [--dry-run] DIR writes theme.lua beside the\n"
+           "configuration from the Hyprland, Waybar, wallbash, and pywal files in DIR.\n";
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -254,6 +321,8 @@ int main(int argc, char **argv) {
         shaode::Command command;
         if (argc >= 2 && std::string(argv[1]) == "msg")
             return send_message(argc, argv);
+        if (argc >= 2 && std::string(argv[1]) == "import")
+            return import_dotfiles(argc, argv);
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--help" || arg == "-h") {

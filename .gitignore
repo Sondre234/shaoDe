@@ -3,3 +3,4 @@
 /.idea/
 /compile_commands.json
 __pycache__/
+/config/theme.lua

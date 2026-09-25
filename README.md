@@ -174,9 +174,13 @@ outputs`), as Hyprland's `desc:` does; a connector-name key wins over it. Monito
 right. `shaode msg get outputs` prints what each monitor ended up with. Reloading
 applies changes without restarting.
 
-See [docs/dotfile-import.md](docs/dotfile-import.md) for the plan to import monitors,
-colors, bar look, and window styling from Hyprland/Waybar dotfiles, and for which of
-those settings shaoDe still lacks.
+`shaode import ~/.config` carries an existing Hyprland/Waybar setup over: monitors, colors
+(wallbash or pywal), bar look, gaps, borders, opacity, input, and wallpaper. It runs
+`hyprland.lua` in a sandbox (or parses `hyprland.conf`), writes `theme.lua` beside the
+configuration, and reports where each value came from and what it skipped. `init.lua` loads
+it with `theme = "theme.lua"` and overrides any of it; `--dry-run` only prints. See
+[docs/dotfile-import.md](docs/dotfile-import.md) for the details and for the settings shaoDe
+still lacks (rounding, blur, shadows).
 
 A control socket runs any Lua action from scripts or other tools:
 `shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. The query

@@ -359,8 +359,8 @@ Config read(lua_State *L) {
     Config config;
     table(L, -1, "configuration result");
     keys(L, -1,
-         {"version", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs", "windows",
-          "bindings", "startup", "shell", "xwayland"});
+         {"version", "theme", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs",
+          "windows", "bindings", "startup", "shell", "xwayland"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
@@ -571,7 +571,8 @@ const Binding *Config::binding(uint32_t modifiers, uint32_t keysym) const {
     return nullptr;
 }
 
-Config parse_config(const std::string &source, const std::string &name) {
+namespace {
+State sandbox() {
     State state(luaL_newstate(), lua_close);
     if (!state)
         fail("cannot allocate Lua state");
@@ -591,17 +592,19 @@ Config parse_config(const std::string &source, const std::string &name) {
         lua_pushnil(L);
         lua_setglobal(L, name);
     }
-    *static_cast<int *>(lua_getextraspace(L)) = 1000;
     lua_sethook(L, instruction_limit, LUA_MASKCOUNT, 1000);
+    return state;
+}
+// Runs one chunk and leaves its single result on the stack.
+void evaluate(lua_State *L, const std::string &source, const std::string &name) {
+    *static_cast<int *>(lua_getextraspace(L)) = 1000;
     if (luaL_loadbufferx(L, source.data(), source.size(), name.c_str(), "t") != LUA_OK ||
         lua_pcall(L, 0, 1, 0) != LUA_OK) {
         const char *message = lua_tostring(L, -1);
         fail(message ? message : "Lua raised a non-string error");
     }
-    return read(L);
 }
-
-Config load_config(const std::filesystem::path &path) {
+std::string read_file(const std::filesystem::path &path) {
     std::ifstream file(path, std::ios::binary);
     if (!file)
         fail("cannot open " + path.string());
@@ -614,6 +617,108 @@ Config load_config(const std::filesystem::path &path) {
     }
     if (file.bad())
         fail("cannot read " + path.string());
-    return parse_config(source, "@" + path.string());
+    return source;
+}
+bool is_record(lua_State *L, int index) {
+    return lua_istable(L, index) && lua_rawlen(L, index) == 0;
+}
+// Copies what `target` lacks from `source`, descending into tables both have as records; lists
+// and values `target` already sets stay as they are.
+void merge(lua_State *L, int target, int source, int depth = 0) {
+    if (depth > 16)
+        fail("theme tables are nested too deeply");
+    target = lua_absindex(L, target);
+    source = lua_absindex(L, source);
+    lua_pushnil(L);
+    while (lua_next(L, source)) {
+        lua_pushvalue(L, -2);
+        lua_rawget(L, target);
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            lua_pushvalue(L, -2);
+            lua_pushvalue(L, -2);
+            lua_rawset(L, target);
+        } else {
+            if (is_record(L, -1) && is_record(L, -2))
+                merge(L, -1, -2, depth + 1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+}
+std::filesystem::path theme_path(lua_State *L, const std::filesystem::path &directory) {
+    lua_getfield(L, -1, "theme");
+    std::filesystem::path path;
+    if (!lua_isnil(L, -1))
+        path = directory / string(L, -1, "theme");
+    lua_pop(L, 1);
+    return path;
+}
+// `theme = "theme.lua"` fills in every setting the configuration leaves out. A missing theme
+// file is not an error, so a configuration can name one before `shaode import` writes it.
+void include_theme(lua_State *L, const std::filesystem::path &directory) {
+    table(L, -1, "configuration result");
+    auto path = theme_path(L, directory);
+    if (path.empty() || !std::filesystem::exists(path))
+        return;
+    evaluate(L, read_file(path), "@" + path.string());
+    table(L, -1, "theme result");
+    lua_getfield(L, -1, "theme");
+    if (!lua_isnil(L, -1))
+        fail("a theme cannot include another theme");
+    lua_pop(L, 1);
+    merge(L, -2, -1);
+    lua_pop(L, 1);
+}
+void shadowed(lua_State *L, int config, int theme, const std::string &prefix,
+              std::vector<std::string> &result) {
+    config = lua_absindex(L, config);
+    theme = lua_absindex(L, theme);
+    lua_pushnil(L);
+    while (lua_next(L, theme)) {
+        if (lua_type(L, -2) == LUA_TSTRING) {
+            auto name = prefix + lua_tostring(L, -2);
+            lua_pushvalue(L, -2);
+            lua_rawget(L, config);
+            if (is_record(L, -1) && is_record(L, -2))
+                shadowed(L, -1, -2, name + ".", result);
+            else if (!lua_isnil(L, -1))
+                result.push_back(name);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+}
+} // namespace
+
+Config parse_config(const std::string &source, const std::string &name,
+                    const std::filesystem::path &directory) {
+    auto state = sandbox();
+    auto *L = state.get();
+    evaluate(L, source, name);
+    include_theme(L, directory);
+    return read(L);
+}
+
+Config load_config(const std::filesystem::path &path) {
+    return parse_config(read_file(path), "@" + path.string(), path.parent_path());
+}
+
+std::optional<std::vector<std::string>> shadowed_settings(const std::filesystem::path &config) {
+    auto state = sandbox();
+    auto *L = state.get();
+    evaluate(L, read_file(config), "@" + config.string());
+    table(L, -1, "configuration result");
+    auto path = theme_path(L, config.parent_path());
+    if (path.empty())
+        return std::nullopt;
+    std::vector<std::string> result;
+    if (!std::filesystem::exists(path))
+        return result;
+    evaluate(L, read_file(path), "@" + path.string());
+    table(L, -1, "theme result");
+    shadowed(L, -2, -1, "", result);
+    std::sort(result.begin(), result.end());
+    return result;
 }
 } // namespace shaode
