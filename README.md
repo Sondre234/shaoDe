@@ -206,7 +206,10 @@ as swaylock or gtklock work; bind one with a `spawn` action. The desktop is cove
 before the locker draws, only the locker receives input, and if it crashes the
 session stays locked until a new locker takes over. Idle notification and idle
 inhibition (`ext-idle-notify-v1`, `idle-inhibit-unstable-v1`) let swayidle lock
-or blank after inactivity while video players keep the session awake.
+or blank after inactivity while video players keep the session awake. While a standalone
+session is on screen it holds a logind sleep inhibitor, so an idle daemon left running by
+another desktop on a different VT cannot suspend the machine; switching VTs away releases it.
+This needs sd-bus from libsystemd, libelogind, or basu at build time.
 
 Browsers and Electron applications (Firefox, Chromium, Discord) get the protocols they
 look for: GPU buffers through linux-dmabuf with explicit sync where the driver supports it,

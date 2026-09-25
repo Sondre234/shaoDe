@@ -3,6 +3,7 @@
 #define _GNU_SOURCE // accept4
 #include "shaode/backend.h"
 #include "shaode/decoration.h"
+#include "shaode/sleep.h"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -158,6 +159,8 @@ struct sh_server {
     struct wlr_backend *backend;
 #if WLR_HAS_SESSION
     struct wlr_session *session;
+    struct wl_listener session_active;
+    int sleep_inhibitor; // logind inhibitor fd while this VT is in front, else -1
 #endif
     struct wlr_renderer *renderer;
     struct wlr_allocator *allocator;
@@ -1867,6 +1870,19 @@ static void inhibitor_destroy(struct wl_listener *listener, void *data) {
     free(inhibitor);
     wlr_idle_notifier_v1_set_inhibited(server->idle_notifier, --server->inhibitors > 0);
 }
+
+#if WLR_HAS_SESSION
+/* The machine stays awake while this VT is in front; switching away lets it sleep again. */
+static void session_active(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, session_active);
+    if (server->session->active && server->sleep_inhibitor < 0) {
+        server->sleep_inhibitor = sh_sleep_inhibit();
+    } else if (!server->session->active && server->sleep_inhibitor >= 0) {
+        close(server->sleep_inhibitor);
+        server->sleep_inhibitor = -1;
+    }
+}
+#endif
 
 /* Video players and games keep the session awake while any inhibitor exists. */
 static void server_new_inhibitor(struct wl_listener *listener, void *data) {
@@ -3696,6 +3712,13 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
         wlr_log(WLR_ERROR, "failed to create wlr_backend");
         return 1;
     }
+#if WLR_HAS_SESSION
+    server.sleep_inhibitor = -1;
+    if (server.session) {
+        add_listener(&server.session->events.active, &server.session_active, session_active);
+        session_active(&server.session_active, NULL);
+    }
+#endif
 
     server.renderer = wlr_renderer_autocreate(server.backend);
     if (server.renderer == NULL) {
@@ -3924,6 +3947,12 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_list_remove(&server.new_output.link);
     wl_list_remove(&server.new_lock.link);
     wl_list_remove(&server.new_inhibitor.link);
+#if WLR_HAS_SESSION
+    if (server.session)
+        wl_list_remove(&server.session_active.link);
+    if (server.sleep_inhibitor >= 0)
+        close(server.sleep_inhibitor);
+#endif
 
     wlr_backend_destroy(server.backend);
     wlr_scene_node_destroy(&server.scene->tree.node);

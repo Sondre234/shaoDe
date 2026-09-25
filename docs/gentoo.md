@@ -19,6 +19,8 @@ between release series. Relevant Gentoo packages are:
 - `dev-qt/qtbase:6` (with its default `network` USE flag), `dev-qt/qtdeclarative:6`,
   and `dev-qt/qtwayland:6`
 - `kde-plasma/layer-shell-qt:6` (6.6+) and `dev-libs/glib:2` for the desktop shell
+- `sys-auth/elogind` (or systemd), whose sd-bus keeps other desktops' idle daemons from
+  suspending the machine while shaoDe is on screen
 - `dev-build/cmake`, `dev-build/ninja`, and `virtual/pkgconfig`
 - A compiler supporting C11 and C++20
 - Python 3 for the automated tests; a Wayland terminal for interactive testing
