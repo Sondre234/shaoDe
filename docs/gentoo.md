@@ -124,6 +124,11 @@ For a first run on new hardware, `tools/tty-session-test.sh` runs the build tree
 time limit; set `SHAODE_TEST_LIMIT` to a number of seconds to quit on its own in
 case input does not work.
 `SHAODE_TEST_TERM` picks the terminal it opens (default foot).
+It asks which profile to run: a directory in `~/.config/shaode/profiles` holding an
+`init.lua` (a symlink to `config/init.lua` keeps up with the tree) and the `theme.lua`
+that `shaode import --config ~/.config/shaode/profiles/NAME/init.lua ~/.config` writes.
+Enter takes the one used last. `-p NAME` skips the question, and `-n` runs a fresh
+session from the example configuration alone, as a first install sees it.
 
 The backend has run on a laptop (amdgpu, single eDP panel, touchpad) and a
 desktop (NVIDIA proprietary driver, three monitors). Hybrid-GPU outputs, hotplug,
