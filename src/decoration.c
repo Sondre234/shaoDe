@@ -7,7 +7,8 @@
 #include <wlr/interfaces/wlr_buffer.h>
 
 enum { DOT_RADIUS = 6, SAMPLES = 4 };
-static const double dot_x[3] = {11, 32, 53}; // close, minimize, fullscreen
+// Indexed close, minimize, fullscreen; laid out minimize, fullscreen, close so close is outermost.
+static const double dot_x[3] = {53, 11, 32};
 static const double dot_y = SH_DECO_HEIGHT / 2.0;
 
 struct pixel_buffer {

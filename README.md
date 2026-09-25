@@ -83,8 +83,8 @@ SIGINT/SIGTERM requests shutdown. A reload does not rerun startup commands.
 
 Windows that leave decorations to the window manager (Wayland applications that support
 server-side decorations, such as kitty, and X11 applications such as Spotify) get no title
-bar. Instead, three small macOS-style dots sit over their top-right corner (close, minimize,
-and fullscreen) and appear when the pointer nears that corner, so they never cover text.
+bar. Instead, three small macOS-style dots sit over their top-right corner (minimize,
+fullscreen, and close, from left to right) and appear when the pointer nears that corner, so they never cover text.
 Dragging the pill around the dots moves the window. Other windows decorate themselves.
 
 Dropping a dragged window over the top edge of the screen, or over a panel along it, makes

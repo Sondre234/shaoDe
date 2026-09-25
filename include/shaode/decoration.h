@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 /* Window controls for windows that ask the compositor to decorate them: three small
- * macOS-style dots (close, minimize, fullscreen) on a translucent pill over the window's
+ * dots (minimize, fullscreen, close from left to right) on a translucent pill over the window's
  * top-right corner. Dragging the pill moves the window. */
 #include <stdbool.h>
 
