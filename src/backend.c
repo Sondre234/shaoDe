@@ -1674,6 +1674,19 @@ static struct sh_toplevel *deco_at(struct sh_server *server, double x, double y,
     return *part == SH_DECO_NONE ? NULL : toplevel;
 }
 
+/* Windows without a title bar move by a press along their top edge, as if they had one. */
+enum { SH_DRAG_STRIP = 6 };
+
+/* `toplevel`, if the pointer is on its surface within the strip along its top edge. */
+static struct sh_toplevel *drag_strip_at(struct sh_toplevel *toplevel, struct wlr_surface *surface,
+                                         double y) {
+    if (!toplevel || !toplevel->deco || toplevel->fullscreen || !surface ||
+        wlr_surface_get_root_surface(surface) != toplevel_surface(toplevel))
+        return NULL;
+    double top = toplevel->scene_tree->node.y + toplevel_geometry(toplevel).y;
+    return y >= top && y < top + SH_DRAG_STRIP ? toplevel : NULL;
+}
+
 static void set_deco_hovered(struct sh_server *server, struct sh_toplevel *toplevel) {
     struct sh_toplevel *old = server->deco_hovered;
     if (old == toplevel)
@@ -1739,6 +1752,11 @@ static void process_cursor_motion(struct sh_server *server, uint32_t time) {
     }
     if (toplevel && hover_focuses(server, toplevel))
         focus_toplevel_raise(toplevel, false);
+    if (drag_strip_at(toplevel, surface, server->cursor->y)) {
+        set_default_cursor(server);
+        wlr_seat_pointer_clear_focus(seat);
+        return;
+    }
     if (surface) {
         wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
         wlr_seat_pointer_notify_motion(seat, time, sx, sy);
@@ -1810,6 +1828,20 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         event->state == WL_POINTER_BUTTON_STATE_PRESSED && !server->locked && !server->deco_pressed
             ? deco_at(server, server->cursor->x, server->cursor->y, &part)
             : NULL;
+    if (!decorated && event->state == WL_POINTER_BUTTON_STATE_PRESSED && !server->locked &&
+        !server->deco_pressed && event->button == BTN_LEFT) {
+        double sx, sy;
+        struct wlr_surface *surface = NULL;
+        struct sh_toplevel *toplevel =
+            desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+        toplevel = drag_strip_at(toplevel, surface, server->cursor->y);
+        if (toplevel) {
+            focus_toplevel(toplevel);
+            server->grab_button = BTN_LEFT;
+            begin_interactive(toplevel, SH_CURSOR_MOVE, 0);
+            return;
+        }
+    }
     if (decorated) {
         focus_toplevel(decorated);
         if (event->button != BTN_LEFT)

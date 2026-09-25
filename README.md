@@ -91,7 +91,8 @@ Windows that leave decorations to the window manager (Wayland applications that 
 server-side decorations, such as kitty, and X11 applications such as Spotify) get no title
 bar. Instead, three small macOS-style dots sit over their top-right corner (minimize,
 fullscreen, and close, from left to right) and appear when the pointer nears that corner, so they never cover text.
-Dragging the pill around the dots moves the window. Other windows decorate themselves.
+Dragging the pill around the dots, or the window's top edge (its top 6 pixels, as a title
+bar would), moves the window. Other windows decorate themselves.
 
 Dropping a dragged window with the pointer at the top edge of the screen, or on a panel along
 it, makes it fullscreen; dragging a fullscreen window away restores its earlier size. Hovering a
