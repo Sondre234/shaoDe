@@ -130,13 +130,23 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-workspace-test-") as dire
             assert current() == {"HEADLESS-1": 1, "HEADLESS-2": 4}
             assert windows() == [(1, "HEADLESS-1", True), (4, "HEADLESS-2", True)], windows()
 
-            # A window placed on another output joins that output's current workspace: the
-            # first window floats back to where it opened, which is now on HEADLESS-2.
+            # Floating a tile keeps it on the output it is on (see #8), on its workspace.
             msg("focus_right")
             assert workspaces()["HEADLESS-1"][1], "focus did not move to HEADLESS-1"
             msg("toggle_floating")
-            assert windows() == [(4, "HEADLESS-2", True), (4, "HEADLESS-2", True)], windows()
-            assert workspaces() == {"HEADLESS-1": (1, False, "-"), "HEADLESS-2": (4, True, "4")}
+            assert sorted(windows()) == [(1, "HEADLESS-1", True), (4, "HEADLESS-2", True)], windows()
+            msg("toggle_floating")
+
+            # A window placed on another output joins that output's current workspace: turning
+            # HEADLESS-1 off moves its tile into HEADLESS-2's tiling.
+            config.write_text((CONFIG % "HEADLESS-2").replace(
+                '["HEADLESS-1"] = { mode = "1280x720" }', '["HEADLESS-1"] = { enabled = false }'))
+            server.send_signal(signal.SIGHUP)
+            wait_for(lambda: log.read_text().count("Configuration reloaded") == 2, processes,
+                     "second reload")
+            wait_for(lambda: windows() == [(4, "HEADLESS-2", True)] * 2, processes,
+                     "tile joined HEADLESS-2's workspace", detail=windows)
+            assert workspaces()["HEADLESS-2"][0::2] == (4, "4"), workspaces()
 
             server.terminate()
             assert server.wait(timeout=5) == 0, log.read_text()
