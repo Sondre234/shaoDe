@@ -404,9 +404,20 @@ static void toplevel_configure(struct sh_toplevel *toplevel, int x, int y, int w
 static void toplevel_configure_box(struct sh_toplevel *toplevel, struct wlr_box box) {
     toplevel_configure(toplevel, box.x, box.y, box.width, box.height);
 }
-/* The window's position and size, as saved to restore it later. */
+/* The window's position and size, as saved to restore it later. A size the client has not
+ * committed yet counts, so placing a window again right after restoring it keeps the restore
+ * size rather than the old one (X11 windows take their new size at once). */
 static struct wlr_box toplevel_box(struct sh_toplevel *toplevel) {
     struct wlr_box geometry = toplevel_geometry(toplevel);
+    if (toplevel->xdg_toplevel) {
+        struct wlr_xdg_surface *base = toplevel->xdg_toplevel->base;
+        const struct wlr_xdg_toplevel_configure *scheduled = &toplevel->xdg_toplevel->scheduled;
+        bool pending = base->configure_idle || !wl_list_empty(&base->configure_list);
+        if (pending && scheduled->width > 0 && scheduled->height > 0) {
+            geometry.width = scheduled->width;
+            geometry.height = scheduled->height;
+        }
+    }
     return (struct wlr_box){toplevel->scene_tree->node.x, toplevel->scene_tree->node.y,
                             geometry.width, geometry.height};
 }

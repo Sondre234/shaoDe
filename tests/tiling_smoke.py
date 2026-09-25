@@ -139,6 +139,25 @@ with tempfile.TemporaryDirectory(prefix="shaode-tiling-test-") as directory:
                      all(b[2:] == (320, 240) for b in boxes() + boxes(2)), processes,
                      "floating sizes restored")
 
+            # Toggling faster than the clients answer must not save a tile as the floating size.
+            floating = boxes() + boxes(2)
+            msg("toggle_tiling")
+            wait_for(lambda: all(w[2] for w in windows()) and
+                     all(b[2:] != (320, 240) for b in boxes() + boxes(2)), processes, "tiled again")
+            # Off and on within one dispatch: no client has committed its floating size yet.
+            burst = [socket.socket(socket.AF_UNIX) for _ in range(2)]
+            for connection in burst:
+                connection.connect(env["SHAODE_SOCKET"])
+            for connection in burst:
+                connection.sendall(b"toggle_tiling\n")
+            for connection in burst:
+                connection.recv(64)
+                connection.close()
+            msg("toggle_tiling")
+            wait_for(lambda: not any(w[2] for w in windows()) and
+                     boxes() + boxes(2) == floating, processes,
+                     "floating geometry kept across rapid toggles")
+
             subscriber.close()
             msg("workspace", "2")  # Notifying a closed subscriber must not hurt the server.
             for window in processes[1:]:
