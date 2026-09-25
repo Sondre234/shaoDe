@@ -46,7 +46,9 @@ mode never starts the shell automatically. No other applications start
 automatically with the example configuration.
 
 The shell has pinned desktop shortcuts (double-click to launch), a taskbar with
-window activation/minimization and a right-click window menu, an application
+window activation/minimization and a right-click window menu (maximize/restore,
+minimize, close), a right-click menu on empty bar space (tiling, applications, show
+desktop), an application
 search menu, a tiling on/off button, a clock, and a show-desktop button. Installed applications are read
 from desktop entries through GIO. Lua configures the panel's height, top or
 bottom placement (`panel_position`), margins that make it float (`panel_margin`, one
