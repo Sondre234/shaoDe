@@ -2,6 +2,7 @@
 #include "shaode/config.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -181,6 +182,81 @@ void read_shell(lua_State *L, ShellConfig &shell) {
     }
     lua_pop(L, 2);
 }
+double number(lua_State *L, const char *key, double fallback, double min, double max) {
+    lua_getfield(L, -1, key);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return fallback;
+    }
+    if (!lua_isnumber(L, -1))
+        fail(std::string(key) + " must be a number");
+    auto result = lua_tonumber(L, -1);
+    if (!(result >= min && result <= max))
+        fail(std::string(key) + " is out of range");
+    lua_pop(L, 1);
+    return result;
+}
+// "WIDTHxHEIGHT" or "WIDTHxHEIGHT@HZ", where HZ may have decimals.
+void parse_mode(const std::string &mode, sh_monitor &monitor) {
+    int width = 0, height = 0, used = 0;
+    double hz = 0;
+    auto *text = mode.c_str();
+    bool valid = std::sscanf(text, "%5dx%5d%n", &width, &height, &used) == 2;
+    if (valid && text[used] == '@') {
+        int more = 0;
+        valid = std::sscanf(text + used + 1, "%lf%n", &hz, &more) == 1 && hz >= 1 && hz <= 1000;
+        used += 1 + more;
+    }
+    if (!valid || text[used] != '\0' || width < 1 || height < 1 || width > 16384 || height > 16384)
+        fail("mode must be WIDTHxHEIGHT or WIDTHxHEIGHT@HZ, e.g. 2560x1440@144");
+    monitor.width = width;
+    monitor.height = height;
+    monitor.refresh = static_cast<int>(hz * 1000 + 0.5);
+}
+void read_monitors(lua_State *L, sh_settings &settings) {
+    lua_getfield(L, -1, "monitors");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    table(L, -1, "outputs.monitors");
+    int index = lua_absindex(L, -1);
+    lua_pushnil(L);
+    while (lua_next(L, index)) {
+        if (lua_type(L, -2) != LUA_TSTRING)
+            fail("outputs.monitors is keyed by output name, e.g. [\"DP-1\"] = { ... }");
+        if (settings.monitor_count == static_cast<int>(std::size(settings.monitors)))
+            fail("outputs.monitors has too many entries");
+        auto &monitor = settings.monitors[settings.monitor_count++];
+        auto name = string(L, -2, "output name");
+        if (name.empty())
+            fail("output name is empty");
+        copy_text(name, monitor.name, "output name");
+        table(L, -1, "monitor settings");
+        keys(L, -1, {"enabled", "mode", "scale", "position", "transform"});
+        monitor.enabled = true;
+        boolean(L, "enabled", "enabled", monitor.enabled);
+        lua_getfield(L, -1, "mode");
+        if (!lua_isnil(L, -1))
+            parse_mode(string(L, -1, "mode"), monitor);
+        lua_pop(L, 1);
+        monitor.scale = static_cast<float>(number(L, "scale", 0, 0.25, 10));
+        monitor.transform = integer(L, "transform", 0, 0, 7);
+        lua_getfield(L, -1, "position");
+        if (!lua_isnil(L, -1)) {
+            table(L, -1, "position");
+            keys(L, -1, {"x", "y"});
+            monitor.positioned = true;
+            constexpr int unset = 1 << 30;
+            monitor.x = integer(L, "x", unset, -65536, 65536);
+            monitor.y = integer(L, "y", unset, -65536, 65536);
+            if (monitor.x == unset || monitor.y == unset)
+                fail("position needs both x and y");
+        }
+        lua_pop(L, 2);
+    }
+    lua_pop(L, 1);
+}
 void instruction_limit(lua_State *L, lua_Debug *) {
     auto *remaining = static_cast<int *>(lua_getextraspace(L));
     if (--*remaining <= 0)
@@ -222,7 +298,8 @@ Config read(lua_State *L) {
         config.settings.workspaces = integer(L, "workspaces", 4, 1, 10);
     }
     lua_pop(L, 1);
-    if (section(L, "outputs", {"order", "primary"})) {
+    if (section(L, "outputs", {"order", "primary", "monitors"})) {
+        read_monitors(L, config.settings);
         lua_getfield(L, -1, "order");
         if (!lua_isnil(L, -1)) {
             auto size = array_size(L, -1, std::size(config.settings.output_order));

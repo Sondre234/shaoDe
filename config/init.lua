@@ -19,6 +19,8 @@ return {
         -- Left to right by connector name; unlisted monitors follow on the right.
         order = { "HDMI-A-1", "DP-3", "DP-1" },
         primary = "DP-3", -- the cursor starts here; without it, the leftmost monitor
+        -- Per-monitor mode, scale, position, rotation (0-7), or enabled = false, e.g.:
+        -- monitors = { ["DP-3"] = { mode = "2560x1440@200", scale = 1.25 } },
     },
     xwayland = true, -- run X11 applications; Xwayland starts on first use (restart to change)
     shell = {

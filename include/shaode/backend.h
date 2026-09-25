@@ -36,6 +36,18 @@ enum sh_action {
 enum sh_modifier { SH_SHIFT = 1, SH_CTRL = 4, SH_ALT = 8, SH_LOGO = 64 };
 enum sh_edge { SH_EDGE_TOP = 1, SH_EDGE_BOTTOM = 2, SH_EDGE_LEFT = 4, SH_EDGE_RIGHT = 8 };
 
+/* Settings for one output, matched by connector name. Zero fields keep the defaults. */
+struct sh_monitor {
+    char name[32];
+    bool enabled;
+    int width, height; /* 0: the preferred resolution */
+    int refresh;       /* mHz; 0: the fastest at that resolution */
+    float scale;       /* 0: 1 */
+    bool positioned;   /* x, y are layout coordinates before the primary output shift */
+    int x, y;
+    int transform; /* enum wl_output_transform, which Hyprland's numbering matches */
+};
+
 struct sh_settings {
     float background[4];
     uint32_t mouse_modifier;
@@ -52,6 +64,8 @@ struct sh_settings {
     char output_order[8][32];
     int output_count;
     char primary_output[32];
+    struct sh_monitor monitors[8];
+    int monitor_count;
 };
 
 struct sh_callbacks {

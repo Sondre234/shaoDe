@@ -197,12 +197,15 @@ struct sh_server {
     enum sh_deco_part deco_pressed_part;
 
     struct wlr_output_layout *output_layout;
-    struct wl_list outputs;
+    struct wl_list outputs;          /* enabled, in the layout */
+    struct wl_list disabled_outputs; /* turned off by outputs.monitors */
     struct wl_listener new_output;
 };
 
 struct sh_output {
     struct wlr_box usable;
+    int x, y;      /* arrangement before the primary output shift */
+    bool disabled; /* listed in disabled_outputs */
     struct wlr_scene_rect *background, *lock_blank;
     bool lock_presented;
     struct wl_list link;
@@ -1614,32 +1617,180 @@ static bool output_listed(const struct sh_settings *settings, const struct sh_ou
     return false;
 }
 
-/* Lays outputs side by side, top-aligned: configured order first, then the rest in the order
- * they appeared. Shifts the row so the primary output starts at x = 0, where the cursor begins. */
+static const struct sh_monitor *monitor_settings(const struct sh_settings *settings,
+                                                 const struct wlr_output *output) {
+    for (int i = 0; i < settings->monitor_count; ++i) {
+        if (strcmp(settings->monitors[i].name, output->name) == 0)
+            return &settings->monitors[i];
+    }
+    return NULL;
+}
+
+/* Adds the output to the layout at x, y, or moves it there. */
+static void layout_output(struct sh_server *server, struct wlr_output *wlr_output, int x, int y) {
+    bool present = wlr_output_layout_get(server->output_layout, wlr_output) != NULL;
+    struct wlr_output_layout_output *l_output =
+        wlr_output_layout_add(server->output_layout, wlr_output, x, y);
+    if (present || l_output == NULL)
+        return;
+    // Removing an output from the layout also destroys its scene output.
+    struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(server->scene, wlr_output);
+    if (scene_output == NULL)
+        scene_output = wlr_scene_output_create(server->scene, wlr_output);
+    wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
+}
+
+/* Outputs with a configured position go there. The rest sit side by side, top-aligned, to
+ * the right of those: configured order first, then the order they appeared. Everything then
+ * shifts so the primary output (if named) starts at 0, 0, where the cursor begins. */
 static void arrange_outputs(struct sh_server *server) {
     const struct sh_settings *settings = server_settings(server);
-    int origin = 0;
-    for (int pass = 0; pass < 2; ++pass) {
-        int x = 0;
-        struct sh_output *output;
-        for (int i = 0; i <= settings->output_count; ++i) {
-            wl_list_for_each_reverse(output, &server->outputs, link) {
-                if (i < settings->output_count ? !output_named(output, settings->output_order[i])
-                                               : output_listed(settings, output))
-                    continue;
-                if (pass == 0 && output_named(output, settings->primary_output))
-                    origin = x;
-                if (pass == 1)
-                    wlr_output_layout_add(server->output_layout, output->wlr_output, x - origin, 0);
-                int width, height;
-                wlr_output_effective_resolution(output->wlr_output, &width, &height);
-                x += width;
-            }
+    struct sh_output *output;
+    int x = 0;
+    bool positioned = false;
+    wl_list_for_each(output, &server->outputs, link) {
+        const struct sh_monitor *monitor = monitor_settings(settings, output->wlr_output);
+        if (monitor == NULL || !monitor->positioned)
+            continue;
+        int width, height;
+        wlr_output_effective_resolution(output->wlr_output, &width, &height);
+        output->x = monitor->x;
+        output->y = monitor->y;
+        x = positioned && x > monitor->x + width ? x : monitor->x + width;
+        positioned = true;
+    }
+    for (int i = 0; i <= settings->output_count; ++i) {
+        wl_list_for_each_reverse(output, &server->outputs, link) {
+            const struct sh_monitor *monitor = monitor_settings(settings, output->wlr_output);
+            if ((monitor != NULL && monitor->positioned) ||
+                (i < settings->output_count ? !output_named(output, settings->output_order[i])
+                                            : output_listed(settings, output)))
+                continue;
+            output->x = x;
+            output->y = 0;
+            int width, height;
+            wlr_output_effective_resolution(output->wlr_output, &width, &height);
+            x += width;
         }
     }
+    int origin_x = 0, origin_y = 0;
+    wl_list_for_each(output, &server->outputs, link) {
+        if (output_named(output, settings->primary_output)) {
+            origin_x = output->x;
+            origin_y = output->y;
+        }
+    }
+    wl_list_for_each(output, &server->outputs, link)
+        layout_output(server, output->wlr_output, output->x - origin_x, output->y - origin_y);
     update_backgrounds(server);
     arrange_layers(server);
     refit_fullscreen(server);
+}
+
+/* The mode for `monitor`: its resolution at the refresh closest to the one asked for, or the
+ * fastest there. Without settings, the preferred resolution at its fastest refresh, since
+ * monitors often mark a 60 Hz mode as preferred. NULL when nothing matches. */
+static struct wlr_output_mode *pick_mode(struct wlr_output *wlr_output,
+                                         const struct sh_monitor *monitor) {
+    struct wlr_output_mode *preferred = wlr_output_preferred_mode(wlr_output);
+    int width = monitor && monitor->width ? monitor->width : preferred ? preferred->width : 0;
+    int height = monitor && monitor->width ? monitor->height : preferred ? preferred->height : 0;
+    int refresh = monitor ? monitor->refresh : 0;
+    struct wlr_output_mode *best = NULL, *candidate;
+    wl_list_for_each(candidate, &wlr_output->modes, link) {
+        if (candidate->width != width || candidate->height != height)
+            continue;
+        if (best == NULL ||
+            (refresh ? abs(candidate->refresh - refresh) < abs(best->refresh - refresh)
+                     : candidate->refresh > best->refresh))
+            best = candidate;
+    }
+    return best;
+}
+
+static void destroy_output_layers(struct sh_server *server, struct wlr_output *wlr_output) {
+    struct sh_layer *layer, *temporary;
+    wl_list_for_each_safe(layer, temporary, &server->layers, link) {
+        if (layer->surface->output == wlr_output)
+            wlr_layer_surface_v1_destroy(layer->surface);
+    }
+}
+
+/* Applies outputs.monitors (or the defaults) to one output and files it under the enabled or
+ * disabled list. Only settings that differ are committed, so a reload does not modeset
+ * needlessly. The last enabled output stays on. Callers arrange the outputs afterwards. */
+static void configure_output(struct sh_server *server, struct sh_output *output) {
+    struct wlr_output *wlr_output = output->wlr_output;
+    const struct sh_monitor *monitor = monitor_settings(server_settings(server), wlr_output);
+    bool enable = monitor == NULL || monitor->enabled;
+    if (!enable) {
+        bool others = false;
+        struct sh_output *candidate;
+        wl_list_for_each(candidate, &server->outputs, link) others |= candidate != output;
+        if (!others) {
+            wlr_log(WLR_ERROR, "Keeping %s on: it is the only output", wlr_output->name);
+            enable = true;
+        }
+    }
+
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    if (!enable) {
+        wlr_output_state_set_enabled(&state, false);
+    } else {
+        if (!wlr_output->enabled)
+            wlr_output_state_set_enabled(&state, true);
+        struct wlr_output_mode *mode = pick_mode(wlr_output, monitor);
+        if (mode != NULL && mode != wlr_output->current_mode) {
+            wlr_output_state_set_mode(&state, mode);
+        } else if (mode == NULL && monitor != NULL && monitor->width != 0) {
+            if (wl_list_empty(&wlr_output->modes))
+                wlr_output_state_set_custom_mode(&state, monitor->width, monitor->height,
+                                                 monitor->refresh);
+            else
+                wlr_log(WLR_ERROR, "%s has no %dx%d mode", wlr_output->name, monitor->width,
+                        monitor->height);
+        }
+        float scale = monitor && monitor->scale > 0 ? monitor->scale : 1;
+        if (scale != wlr_output->scale)
+            wlr_output_state_set_scale(&state, scale);
+        enum wl_output_transform transform = monitor ? monitor->transform : 0;
+        if (transform != wlr_output->transform)
+            wlr_output_state_set_transform(&state, transform);
+    }
+    if (state.committed != 0 && !wlr_output_test_state(wlr_output, &state)) {
+        // Fall back to the defaults; a new monitor must still light up.
+        wlr_log(WLR_ERROR, "%s rejected its configured settings", wlr_output->name);
+        wlr_output_state_finish(&state);
+        wlr_output_state_init(&state);
+        wlr_output_state_set_enabled(&state, true);
+        struct wlr_output_mode *mode = pick_mode(wlr_output, NULL);
+        if (mode != NULL)
+            wlr_output_state_set_mode(&state, mode);
+        wlr_output_state_set_scale(&state, 1);
+        wlr_output_state_set_transform(&state, WL_OUTPUT_TRANSFORM_NORMAL);
+        if (!wlr_output_test_state(wlr_output, &state))
+            wlr_output_state_set_mode(&state, wlr_output_preferred_mode(wlr_output));
+        enable = true;
+    }
+    if (state.committed != 0)
+        wlr_output_commit_state(wlr_output, &state);
+    wlr_output_state_finish(&state);
+
+    if (wl_list_empty(&output->link) || enable == output->disabled) {
+        wl_list_remove(&output->link);
+        wl_list_insert(enable ? &server->outputs : &server->disabled_outputs, &output->link);
+        output->disabled = !enable;
+    }
+    if (enable) {
+        wlr_scene_node_set_enabled(&output->background->node, true);
+        wlr_scene_node_set_enabled(&output->lock_blank->node, true);
+    } else {
+        destroy_output_layers(server, wlr_output);
+        wlr_output_layout_remove(server->output_layout, wlr_output);
+        wlr_scene_node_set_enabled(&output->background->node, false);
+        wlr_scene_node_set_enabled(&output->lock_blank->node, false);
+    }
 }
 
 static void reload_config(struct sh_server *server) {
@@ -1650,6 +1801,12 @@ static void reload_config(struct sh_server *server) {
         if (!configure_keyboard(server, keyboard->wlr_keyboard))
             wlr_log(WLR_ERROR, "Could not apply reloaded keymap");
     }
+    // Enable outputs before disabling others, so a swap never leaves none on.
+    struct sh_output *output, *temporary;
+    wl_list_for_each_safe(output, temporary, &server->disabled_outputs, link)
+        configure_output(server, output);
+    wl_list_for_each_safe(output, temporary, &server->outputs, link)
+        configure_output(server, output);
     arrange_outputs(server);
     int count = server_settings(server)->workspaces;
     struct sh_toplevel *toplevel;
@@ -1663,7 +1820,6 @@ static void reload_config(struct sh_server *server) {
         focus_previous(server);
     }
     // The gap may have changed.
-    struct sh_output *output;
     wl_list_for_each(output, &server->outputs, link) reflow_output(server, output->wlr_output);
 }
 
@@ -1681,11 +1837,7 @@ static void output_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&output->request_state.link);
     wl_list_remove(&output->destroy.link);
     wl_list_remove(&output->link);
-    struct sh_layer *layer, *temporary;
-    wl_list_for_each_safe(layer, temporary, &output->server->layers, link) {
-        if (layer->surface->output == output->wlr_output)
-            wlr_layer_surface_v1_destroy(layer->surface);
-    }
+    destroy_output_layers(output->server, output->wlr_output);
     wlr_scene_node_destroy(&output->background->node);
     wlr_scene_node_destroy(&output->lock_blank->node);
     struct sh_server *server = output->server;
@@ -1709,27 +1861,6 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 
     wlr_output_init_render(wlr_output, server->allocator, server->renderer);
 
-    struct wlr_output_state state;
-    wlr_output_state_init(&state);
-    wlr_output_state_set_enabled(&state, true);
-
-    // Monitors often mark a 60 Hz mode as preferred; keep that resolution at its fastest refresh.
-    struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
-    if (mode != NULL) {
-        struct wlr_output_mode *fastest = mode, *candidate;
-        wl_list_for_each(candidate, &wlr_output->modes, link) {
-            if (candidate->width == mode->width && candidate->height == mode->height &&
-                candidate->refresh > fastest->refresh)
-                fastest = candidate;
-        }
-        wlr_output_state_set_mode(&state, fastest);
-        if (fastest != mode && !wlr_output_test_state(wlr_output, &state))
-            wlr_output_state_set_mode(&state, mode);
-    }
-
-    wlr_output_commit_state(wlr_output, &state);
-    wlr_output_state_finish(&state);
-
     struct sh_output *output = calloc(1, sizeof(*output));
     output->wlr_output = wlr_output;
     output->server = server;
@@ -1742,12 +1873,8 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     add_listener(&wlr_output->events.request_state, &output->request_state, output_request_state);
     add_listener(&wlr_output->events.destroy, &output->destroy, output_destroy);
 
-    wl_list_insert(&server->outputs, &output->link);
-
-    struct wlr_output_layout_output *l_output =
-        wlr_output_layout_add(server->output_layout, wlr_output, 0, 0);
-    struct wlr_scene_output *scene_output = wlr_scene_output_create(server->scene, wlr_output);
-    wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
+    wl_list_init(&output->link);
+    configure_output(server, output);
     if (wlr_output_is_wl(wlr_output))
         wlr_wl_output_set_title(wlr_output, "shaoDe — nested desktop");
     arrange_outputs(server);
@@ -2913,7 +3040,29 @@ static void control_describe_windows(struct sh_server *server, int fd) {
     }
 }
 
+static void control_describe_output(struct sh_server *server, int fd, struct sh_output *output) {
+    struct wlr_output *o = output->wlr_output;
+    struct wlr_box box = {0};
+    if (!output->disabled)
+        wlr_output_layout_get_box(server->output_layout, o, &box);
+    char line[256];
+    // name, enabled, x, y, logical width, height, scale, transform, mode — one per line.
+    snprintf(line, sizeof(line), "%s\t%d\t%d\t%d\t%d\t%d\t%g\t%d\t%dx%d@%.3f\n", o->name,
+             !output->disabled, box.x, box.y, box.width, box.height, o->scale, o->transform,
+             o->width, o->height, o->refresh / 1000.0);
+    control_reply(fd, line);
+}
+
 static void control_handle(struct sh_server *server, int fd, const char *request) {
+    if (!strcmp(request, "get outputs")) {
+        control_reply(fd, "ok\n");
+        struct sh_output *output;
+        wl_list_for_each_reverse(output, &server->outputs, link)
+            control_describe_output(server, fd, output);
+        wl_list_for_each_reverse(output, &server->disabled_outputs, link)
+            control_describe_output(server, fd, output);
+        return;
+    }
     if (!strcmp(request, "get workspace")) {
         char reply[32];
         snprintf(reply, sizeof(reply), "ok\n%d\n", server->workspace + 1);
@@ -3125,7 +3274,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     if (setenv("WLR_BACKENDS", backends, 1) < 0)
         return 1;
     if (mode == SH_BACKEND_HEADLESS)
-        setenv("WLR_HEADLESS_OUTPUTS", "1", 1);
+        setenv("WLR_HEADLESS_OUTPUTS", "1", 0); // tests may ask for more
 
     struct sh_server server = {.callbacks = callbacks};
     wl_list_init(&server.subscribers);
@@ -3203,6 +3352,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
 
     wl_list_init(&server.outputs);
+    wl_list_init(&server.disabled_outputs);
     add_listener(&server.backend->events.new_output, &server.new_output, server_new_output);
 
     server.scene = wlr_scene_create();

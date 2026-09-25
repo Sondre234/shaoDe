@@ -47,8 +47,8 @@ int main(int argc, char **argv) {
         require(shaode::parse_action("toggle_floating") == SH_TOGGLE_FLOATING,
                 "toggle_floating action missing");
         rejects("return {layout={tiling='yes'}}");
-        auto outputs = shaode::parse_config(
-            "return {outputs={order={'HDMI-A-1','DP-3'},primary='DP-3'}}");
+        auto outputs =
+            shaode::parse_config("return {outputs={order={'HDMI-A-1','DP-3'},primary='DP-3'}}");
         require(outputs.settings.output_count == 2 &&
                     std::string(outputs.settings.output_order[1]) == "DP-3" &&
                     std::string(outputs.settings.primary_output) == "DP-3",
@@ -58,6 +58,35 @@ int main(int argc, char **argv) {
         rejects("return {outputs={order={'1','2','3','4','5','6','7','8','9'}}}");
         rejects("return {outputs={primary=1}}");
         rejects("return {outputs={position={}}}");
+        auto monitors = shaode::parse_config(
+            "return {outputs={monitors={['DP-3']={mode='2560x1440@143.98',scale=1.25,"
+            "position={x=-2048,y=0},transform=1},['HDMI-A-1']={enabled=false}}}}");
+        require(monitors.settings.monitor_count == 2, "monitors not parsed");
+        for (int i = 0; i < 2; ++i) {
+            const auto &m = monitors.settings.monitors[i];
+            if (std::string(m.name) == "DP-3")
+                require(m.enabled && m.width == 2560 && m.height == 1440 && m.refresh == 143980 &&
+                            m.scale == 1.25F && m.positioned && m.x == -2048 && m.y == 0 &&
+                            m.transform == 1,
+                        "monitor settings mismatch");
+            else
+                require(std::string(m.name) == "HDMI-A-1" && !m.enabled && m.width == 0 &&
+                            !m.positioned,
+                        "disabled monitor mismatch");
+        }
+        auto plain = shaode::parse_config("return {outputs={monitors={X={mode='800x600'}}}}");
+        require(plain.settings.monitors[0].refresh == 0 && plain.settings.monitors[0].enabled,
+                "mode without refresh mismatch");
+        rejects("return {outputs={monitors={'DP-1'}}}");
+        rejects("return {outputs={monitors={['']={}}}}");
+        rejects("return {outputs={monitors={X={mode='2560x1440@'}}}}");
+        rejects("return {outputs={monitors={X={mode='2560x1440x'}}}}");
+        rejects("return {outputs={monitors={X={mode='0x1440'}}}}");
+        rejects("return {outputs={monitors={X={scale=0}}}}");
+        rejects("return {outputs={monitors={X={transform=8}}}}");
+        rejects("return {outputs={monitors={X={position={x=1}}}}}");
+        rejects("return {outputs={monitors={X={position={x=1,y=2,z=3}}}}}");
+        rejects("return {outputs={monitors={X={refresh=60}}}}");
         require(shaode::parse_action("workspace_next") == SH_WORKSPACE_NEXT,
                 "control action names differ from Lua");
         rejects("return {bindings={{mods={'Alt'},key='1',action='workspace'}}}");

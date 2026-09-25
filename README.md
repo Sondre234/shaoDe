@@ -133,13 +133,38 @@ and `_JAVA_AWT_WM_NONREPARENTING=1` unless they are already set.
 Monitors sit side by side, top-aligned. `outputs.order` lists connector names
 (such as `DP-3`) left to right; unlisted monitors follow on the right in the order
 they appear. `outputs.primary` puts that monitor at the layout origin, where the
-cursor starts. Each monitor runs its preferred resolution at the fastest refresh
-rate available for it.
+cursor starts. By default each monitor runs its preferred resolution at the fastest
+refresh rate available for it. `outputs.monitors`, keyed by connector name, overrides
+that per monitor:
+
+```lua
+outputs = {
+    primary = "DP-3",
+    monitors = {
+        ["DP-3"] = { mode = "2560x1440@200", scale = 1.25, position = { x = 0, y = 0 } },
+        ["HDMI-A-1"] = { mode = "2560x1440@144", position = { x = -2048, y = 0 } },
+        ["DP-1"] = { enabled = false },
+    },
+},
+```
+
+`mode` is `WIDTHxHEIGHT` or `WIDTHxHEIGHT@HZ`; the closest refresh rate at that
+resolution wins. `scale` is fractional, `transform` takes Hyprland's (and Wayland's)
+0–7, and `enabled = false` turns a monitor off (never the last one). Monitors with a
+`position` go there, in logical pixels after scaling; the rest follow in a row to their
+right. `shaode msg get outputs` prints what each monitor ended up with. Reloading
+applies changes without restarting.
+
+See [docs/dotfile-import.md](docs/dotfile-import.md) for the plan to import monitors,
+colors, bar look, and window styling from Hyprland/Waybar dotfiles, and for which of
+those settings shaoDe still lacks.
 
 A control socket runs any Lua action from scripts or other tools:
 `shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. The query
 `shaode msg get workspace` prints the current workspace, `shaode msg get tiling` prints
-`on` or `off`, and `shaode msg get windows` prints one tab-separated line per window:
+`on` or `off`, `shaode msg get outputs` prints one tab-separated line per monitor (name,
+enabled, x, y, logical width and height, scale, transform, and mode), and
+`shaode msg get windows` prints one tab-separated line per window:
 workspace, focused, minimized, tiled, x, y, width, height, app ID, and title. A client
 that sends `subscribe` keeps its connection and receives `tiling on|off` and
 `workspace N` lines after every change, plus `launcher OUTPUT` when the `launcher` action
