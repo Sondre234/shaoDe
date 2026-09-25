@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <string>
 
+static bool operator==(const sh_rect &a, const sh_rect &b) {
+    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+}
+
 namespace {
 void require(bool value, const char *message) {
     if (!value)
@@ -104,6 +108,22 @@ int main() {
                 "split did not follow the resized edge");
         require(!sh_tiling_resize(tiling, &windows[0], SH_EDGE_RIGHT, placed[&windows[0]]),
                 "the outer edge of the output moved");
+
+        // A preview gives the tile a new window would get, without changing the tree.
+        const Placement before = arrange(tiling, area, 8);
+        sh_rect preview{};
+        require(sh_tiling_preview(tiling, "DP-1", 0, &windows[5], &windows[1], false, 0, 0, area, 8,
+                                  &preview),
+                "preview failed");
+        require(!sh_tiling_preview(tiling, "DP-1", 0, &windows[1], nullptr, false, 0, 0, area, 8,
+                                   &preview),
+                "previewed a window that is already tiled");
+        require(arrange(tiling, area, 8) == before, "preview changed the tree");
+        sh_tiling_insert(tiling, "DP-1", 0, &windows[5], &windows[1], false, 0, 0);
+        placed = arrange(tiling, area, 8);
+        require(placed[&windows[5]] == preview, "preview differs from the actual tile");
+        sh_tiling_remove(tiling, &windows[5]);
+        require(arrange(tiling, area, 8) == before, "removal did not restore the tree");
 
         // Trees are separate per output and workspace.
         sh_tiling_insert(tiling, "DP-1", 1, &windows[3], nullptr, false, 0, 0);

@@ -246,8 +246,9 @@ struct sh_toplevel {
     struct wl_listener decoration_mode, decoration_destroy;
     struct wlr_box restore_box;
     bool arranged;
-    bool tiled;    // in the tiling tree; restore_box keeps its floating geometry
-    bool floating; // kept out of the tiling (dialogs, or toggled by the user)
+    bool tiled;      // in the tiling tree; restore_box keeps its floating geometry
+    bool floating;   // kept out of the tiling (dialogs, or toggled by the user)
+    bool tile_sized; // first configured at its predicted tile, so it has no floating size yet
     struct wl_list link;
     struct sh_server *server;
     struct wlr_xdg_toplevel *xdg_toplevel; // NULL for X11 windows
@@ -406,7 +407,10 @@ static void toplevel_configure(struct sh_toplevel *toplevel, int x, int y, int w
         return;
     }
 #endif
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
+    // Every configure makes the client draw again, so an unchanged size is not sent again.
+    const struct wlr_xdg_toplevel_configure *scheduled = &toplevel->xdg_toplevel->scheduled;
+    if (scheduled->width != width || scheduled->height != height)
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
 }
 static void toplevel_configure_box(struct sh_toplevel *toplevel, struct wlr_box box) {
     toplevel_configure(toplevel, box.x, box.y, box.width, box.height);
@@ -447,8 +451,11 @@ static void toplevel_set_states(struct sh_toplevel *toplevel, bool maximized, ui
         return;
     }
 #endif
-    wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, maximized);
-    wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, tiled);
+    const struct wlr_xdg_toplevel_configure *scheduled = &toplevel->xdg_toplevel->scheduled;
+    if (scheduled->maximized != maximized)
+        wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, maximized);
+    if (scheduled->tiled != tiled)
+        wlr_xdg_toplevel_set_tiled(toplevel->xdg_toplevel, tiled);
 }
 static void toplevel_set_fullscreen_state(struct sh_toplevel *toplevel, bool fullscreen) {
 #if WLR_HAS_XWAYLAND
@@ -2367,6 +2374,9 @@ static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *outpu
     if (!toplevel->arranged)
         toplevel->restore_box =
             toplevel->fullscreen ? toplevel->fullscreen_restore : toplevel_box(toplevel);
+    if (toplevel->tile_sized) // Floating later lets the client choose its size.
+        toplevel->restore_box.width = toplevel->restore_box.height = 0;
+    toplevel->tile_sized = false;
     toplevel->arranged = false;
     toplevel->tiled = true;
     if (toplevel->foreign)
@@ -2671,20 +2681,59 @@ static void maximize_toplevel(struct sh_toplevel *toplevel, bool maximized) {
         restore_toplevel(toplevel);
 }
 
+/* New windows open on the output under the pointer, as in Hyprland. */
+static struct wlr_output *new_window_output(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    struct wlr_output *output =
+        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
+    return output ? output : toplevel_output(toplevel);
+}
+
+/* Where a new window on `output` joins the tiling, as in Hyprland: it splits the focused tile
+ * when that is on the pointer's output, else the tile under the pointer. Returns the output of
+ * the tree it joins and sets `target` to the tile it splits, if any. */
+static struct wlr_output *new_tile_split(struct sh_toplevel *toplevel, struct wlr_output *output,
+                                         struct sh_toplevel **target) {
+    struct sh_toplevel *previous = toplevel->server->focused_toplevel;
+    bool split_focused = previous && previous != toplevel && previous->tiled &&
+                         toplevel_visible(previous) &&
+                         (!output || tiled_output(previous) == output);
+    *target = split_focused ? previous : NULL;
+    return split_focused ? tiled_output(previous) : output;
+}
+
+/* The tile a new xdg-shell window will get when it maps, sent with its first configure so the
+ * first buffer already fits: otherwise it is drawn at its own size, shown there, and drawn
+ * again at the tile's size. */
+static bool initial_tile_size(struct sh_toplevel *toplevel, int *width, int *height) {
+    struct sh_server *server = toplevel->server;
+    if (!server->tiling_enabled || toplevel->xdg_toplevel->requested.fullscreen ||
+        toplevel_is_dialog(toplevel))
+        return false;
+    struct sh_toplevel *target;
+    struct wlr_output *output = new_tile_split(toplevel, new_window_output(toplevel), &target);
+    if (!output)
+        return false;
+    const struct sh_settings *settings = server_settings(server);
+    struct sh_rect area = gap_area(settings, usable_area(server, output), SH_TILE), rect;
+    if (!sh_tiling_preview(server->tiling, output->name, server->workspace, toplevel, target, true,
+                           server->cursor->x, server->cursor->y, area, settings->gap_inner, &rect))
+        return false;
+    rect = inside_border(server, rect);
+    *width = rect.width;
+    *height = rect.height;
+    return true;
+}
+
 static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool maximized) {
     struct sh_server *server = toplevel->server;
-    struct sh_toplevel *previous = server->focused_toplevel;
     toplevel->workspace = toplevel->server->workspace;
     int offset = 40 + 32 * (wl_list_length(&toplevel->server->toplevels) % 8);
     int x = offset, y = offset;
     bool resize = false;
     struct wlr_box geometry = toplevel_geometry(toplevel);
     int width = geometry.width, height = geometry.height;
-    // New windows open on the output under the pointer, as in Hyprland.
-    struct wlr_output *output =
-        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
-    if (!output)
-        output = toplevel_output(toplevel);
+    struct wlr_output *output = new_window_output(toplevel);
     if (output) {
         struct sh_rect area = usable_area(server, output);
         // Keep newly opened applications reachable inside a small nested output.
@@ -2709,12 +2758,13 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
     publish_toplevel(toplevel);
     toplevel->floating = toplevel_is_dialog(toplevel);
     if (wants_tiling(toplevel)) {
-        // As in Hyprland: split the focused tile when it is on the pointer's output, else the
-        // tile under the pointer.
-        bool split_focused = previous && previous->tiled && toplevel_visible(previous) &&
-                             (!output || tiled_output(previous) == output);
-        tile_toplevel(toplevel, split_focused ? tiled_output(previous) : output,
-                      split_focused ? previous : NULL, true);
+        struct sh_toplevel *target;
+        struct wlr_output *tile_output = new_tile_split(toplevel, output, &target);
+        tile_toplevel(toplevel, tile_output, target, true);
+    } else if (toplevel->tile_sized) {
+        toplevel->tile_sized = false; // It floats after all: let the client choose its size.
+        toplevel_set_states(toplevel, false, 0);
+        toplevel_configure(toplevel, x, y, 0, 0);
     }
     focus_toplevel(toplevel);
     if (fullscreen)
@@ -2756,7 +2806,11 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
 
     if (toplevel->xdg_toplevel->base->initial_commit) {
-        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+        int width = 0, height = 0;
+        toplevel->tile_sized = initial_tile_size(toplevel, &width, &height);
+        if (toplevel->tile_sized)
+            toplevel_set_states(toplevel, false, ALL_EDGES);
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
         if (toplevel->decoration)
             wlr_xdg_toplevel_decoration_v1_set_mode(
                 toplevel->decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
@@ -2825,6 +2879,10 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
          * pointer at the same relative spot across the width and at most as far down. */
         struct wlr_box geometry = toplevel_geometry(toplevel);
         struct wlr_box restore = toplevel->restore_box;
+        if (restore.width <= 0 || restore.height <= 0) { // never floated: keep its size
+            restore.width = geometry.width;
+            restore.height = geometry.height;
+        }
         double from_left = server->cursor->x - toplevel->scene_tree->node.x;
         double from_top = server->cursor->y - toplevel->scene_tree->node.y;
         if (geometry.width > 0)

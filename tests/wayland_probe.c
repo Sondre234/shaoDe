@@ -287,6 +287,8 @@ int main(int argc, char **argv) {
     struct probe probe = {.width = 320, .height = 240, .panel_height = 48};
     if (argc == 2 && !strcmp(argv[1], "--external-control"))
         probe.external_control = true;
+    else if (argc == 2 && !strcmp(argv[1], "--window-only")) // external control, no panel
+        probe.external_control = probe.external_panel = true;
     else if (argc == 2 && !strcmp(argv[1], "--globals"))
         probe.list_globals = true;
     else if (argc == 3 && !strcmp(argv[1], "--external-panel")) {
@@ -300,8 +302,8 @@ int main(int argc, char **argv) {
         probe.close_app_id = argv[2];
         probe.activate = !strcmp(argv[1], "--activate");
     } else if (argc != 1)
-        die("usage: wayland_probe [--globals | --external-control | --external-panel HEIGHT | "
-            "--close APP_ID | --activate APP_ID]");
+        die("usage: wayland_probe [--globals | --external-control | --window-only | "
+            "--external-panel HEIGHT | --close APP_ID | --activate APP_ID]");
     struct wl_display *display = wl_display_connect(NULL);
     if (!display)
         die("cannot connect to compositor");

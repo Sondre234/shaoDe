@@ -164,6 +164,35 @@ void sh_tiling_arrange(sh_tiling *tiling, const char *output, int workspace, sh_
     tiling->layout(found->second.get(), area, area, gap, place, userdata);
 }
 
+bool sh_tiling_preview(sh_tiling *tiling, const char *output, int workspace, void *window,
+                       const void *target, bool has_point, double x, double y, sh_rect area,
+                       int gap, sh_rect *result) {
+    if (!tiling || !output || !window || !result || area.width < 1 || area.height < 1 ||
+        tiling->leaves.contains(window))
+        return false;
+    struct Found {
+        void *window;
+        sh_rect *rect;
+        bool found;
+    } found{window, result, false};
+    sh_tiling_insert(tiling, output, workspace, window, target, has_point, x, y);
+    sh_tiling_arrange(
+        tiling, output, workspace, area, gap,
+        [](void *data, void *placed, sh_rect rect) {
+            auto *found = static_cast<Found *>(data);
+            if (placed == found->window) {
+                *found->rect = rect;
+                found->found = true;
+            }
+        },
+        &found);
+    sh_tiling_remove(tiling, window);
+    // Arranging again restores the boxes that later insertions and resizes read.
+    sh_tiling_arrange(
+        tiling, output, workspace, area, gap, [](void *, void *, sh_rect) {}, nullptr);
+    return found.found;
+}
+
 bool sh_tiling_resize(sh_tiling *tiling, const void *window, uint32_t edges, sh_rect rect) {
     if (!tiling)
         return false;

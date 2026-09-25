@@ -126,6 +126,11 @@ const char *sh_tiling_output(const struct sh_tiling *tiling, const void *window)
 typedef void (*sh_tile_place)(void *userdata, void *window, struct sh_rect rect);
 void sh_tiling_arrange(struct sh_tiling *tiling, const char *output, int workspace,
                        struct sh_rect area, int gap, sh_tile_place place, void *userdata);
+/* The tile `window` would get from sh_tiling_insert and sh_tiling_arrange with these arguments,
+ * leaving the tree as it was. False when the window is already tiled or the area is empty. */
+bool sh_tiling_preview(struct sh_tiling *tiling, const char *output, int workspace, void *window,
+                       const void *target, bool has_point, double x, double y, struct sh_rect area,
+                       int gap, struct sh_rect *result);
 /* Moves the splits beside the window's given edges (enum sh_edge bits) to those edges of
  * `rect`, in the coordinates of the last arrangement. Returns whether anything changed. */
 bool sh_tiling_resize(struct sh_tiling *tiling, const void *window, uint32_t edges,
