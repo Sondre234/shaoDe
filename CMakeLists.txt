@@ -191,6 +191,10 @@ if(SHAODE_BUILD_COMPOSITOR)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/output_workspace_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)
         set_tests_properties(output_workspace_smoke PROPERTIES TIMEOUT 60)
+        add_test(NAME output_follow_smoke COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/output_follow_smoke.py
+            $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)
+        set_tests_properties(output_follow_smoke PROPERTIES TIMEOUT 60)
         add_test(NAME animation_smoke COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/animation_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)

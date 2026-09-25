@@ -111,12 +111,13 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-tiling-test-") as directo
             wait_for(lambda: len(windows()) == 3 and windows()[2][1] and
                      inside(windows()[2][2:], small), "third window tiled on the small output")
 
-            # Disabling the large output moves its tiles into the small output's tiling, off
-            # the origin, so no leftover coordinates happen to fit.
+            # Disabling the large output moves its tiles into the small output's tiling. The
+            # only output left starts at the origin, far from the tiles at y = 3000, so no
+            # leftover coordinates happen to fit.
             reload(config(first="enabled = false", second="position = { x = 3000, y = 200 }"))
             state = outputs()
             assert state["HEADLESS-1"][0] is False and \
-                state["HEADLESS-2"] == (True, 3000, 200, 1600, 900), state
+                state["HEADLESS-2"] == (True, 0, 0, 1600, 900), state
             small = state["HEADLESS-2"][1:]
             wait_for(lambda: all(w[1] and inside(w[2:], small) for w in windows()) and
                      disjoint([w[2:] for w in windows()]),
