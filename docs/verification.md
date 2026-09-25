@@ -156,3 +156,15 @@ capture source. `compositor_smoke` checks that every one of these globals is adv
 Not yet exercised: screen sharing end to end through xdg-desktop-portal-wlr and
 PipeWire, the D-Bus environment export in a physical `--session`, drag-and-drop, pointer
 lock, and popup placement at output edges.
+
+## Multi-monitor tiling checkpoint
+
+Added 2026-09-25. `output_tiling_smoke` runs two headless outputs of different sizes
+and scales (2048x1152 logical at 1.25, and 1600x900): disabling one in the config moves
+its tiles into the other's tiling without overlap, fullscreen then covers exactly the
+remaining output, and turning tiling off leaves every window floating inside it. With a
+temporary virtual-pointer build (not committed), dragging a maximized window onto the
+smaller output tiled it there beside later windows, a tile dropped there stayed inside
+it after tiling was turned off, a window floated with `toggle_floating` stayed floating,
+and a window straddling both outputs went fullscreen and maximized on the one it mostly
+covered. Not yet exercised on physical mixed-scale monitors.

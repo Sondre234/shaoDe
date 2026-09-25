@@ -132,6 +132,7 @@ struct sh_server {
     bool tiling_enabled;
     bool grab_retile;     // the grabbed window left the tiling to be moved; retile it on drop
     bool grab_fullscreen; // the grabbed window is fullscreen until it is dragged far enough
+    struct wlr_output *grab_output; // where the grabbed window was when the grab began
 
     int control_fd;
     struct wl_list subscribers; // control clients receiving state changes
@@ -248,6 +249,7 @@ struct sh_toplevel {
     bool arranged;
     bool tiled;    // in the tiling tree; restore_box keeps its floating geometry
     bool floating; // kept out of the tiling (dialogs, or toggled by the user)
+    bool placed;   // floating only because it was snapped or maximized by hand
     struct wl_list link;
     struct sh_server *server;
     struct wlr_xdg_toplevel *xdg_toplevel; // NULL for X11 windows
@@ -335,6 +337,7 @@ static void notify_subscribers(struct sh_server *server);
 static void request_launcher(struct sh_server *server);
 static void process_cursor_motion(struct sh_server *server, uint32_t time);
 static void refit_fullscreen(struct sh_server *server);
+static void rehome_tiles(struct sh_server *server);
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void refresh_frame(struct sh_toplevel *toplevel);
 static void reload_config(struct sh_server *server);
@@ -799,6 +802,7 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
     case SH_TOGGLE_FLOATING:
         if (current && current->tiled) {
             current->floating = true;
+            current->placed = false;
             untile_toplevel(current, true);
         } else if (current) {
             current->floating = false;
@@ -1228,6 +1232,7 @@ static void reset_cursor_mode(struct sh_server *server) {
     server->cursor_mode = SH_CURSOR_PASSTHROUGH;
     server->grabbed_toplevel = NULL;
     server->grab_retile = false;
+    server->grab_output = NULL;
     server->grab_fullscreen = false;
 }
 
@@ -1245,11 +1250,17 @@ static void finish_grab(struct sh_server *server) {
     struct sh_toplevel *toplevel = server->grabbed_toplevel;
     bool fullscreen = toplevel && server->cursor_mode == SH_CURSOR_MOVE &&
                       !server->grab_fullscreen && dropped_at_top(server);
+    struct wlr_output *output =
+        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
+    // A window floating only because it was snapped or maximized joins the tiling of another
+    // output it is dropped on; one floated on purpose stays floating.
+    if (toplevel && server->cursor_mode == SH_CURSOR_MOVE && toplevel->floating &&
+        toplevel->placed && output && output != server->grab_output && server->tiling_enabled) {
+        toplevel->floating = toplevel->placed = false;
+        server->grab_retile = true;
+    }
     if (server->grab_retile && toplevel && wants_tiling(toplevel))
-        tile_toplevel(toplevel,
-                      wlr_output_layout_output_at(server->output_layout, server->cursor->x,
-                                                  server->cursor->y),
-                      NULL, true);
+        tile_toplevel(toplevel, output, NULL, true);
     server->grab_retile = false;
     if (fullscreen)
         set_fullscreen(toplevel, true);
@@ -2112,6 +2123,7 @@ static void reload_config(struct sh_server *server) {
     wl_list_for_each_safe(output, temporary, &server->outputs, link)
         configure_output(server, output);
     arrange_outputs(server);
+    rehome_tiles(server);
     int count = server_settings(server)->workspaces;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
@@ -2219,19 +2231,78 @@ static void place_toplevel(struct sh_toplevel *toplevel, enum sh_action action,
     toplevel_configure(toplevel, target.x, target.y, target.width, target.height);
 }
 
+/* The output a box shares the most area with, or NULL when it is on none. */
+static struct wlr_output *box_output(struct sh_server *server, struct wlr_box box) {
+    struct wlr_output *best = NULL;
+    long best_area = 0;
+    struct sh_output *output;
+    wl_list_for_each(output, &server->outputs, link) {
+        struct wlr_box full, shared;
+        wlr_output_layout_get_box(server->output_layout, output->wlr_output, &full);
+        if (!wlr_box_intersection(&shared, &box, &full))
+            continue;
+        long area = (long)shared.width * shared.height;
+        if (area > best_area) {
+            best = output->wlr_output;
+            best_area = area;
+        }
+    }
+    return best;
+}
+
+/* A tile belongs to the output whose tiling holds it. Any other window belongs to the output
+ * it covers most, not the one under its top-left corner: a window dropped across two
+ * outputs, or moved from a larger one, must fit the output it is mostly on. */
+static struct wlr_output *toplevel_output(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    struct wlr_output *output = toplevel->tiled ? tiled_output(toplevel) : NULL;
+    struct wlr_box box = toplevel_box(toplevel);
+    if (!output)
+        output = box_output(server, box);
+    if (!output) {
+        // Off every output: the one nearest its centre.
+        double x, y;
+        wlr_output_layout_closest_point(server->output_layout, NULL, box.x + box.width / 2.0,
+                                        box.y + box.height / 2.0, &x, &y);
+        output = wlr_output_layout_output_at(server->output_layout, x, y);
+    }
+    return output ? output : first_output(server);
+}
+
+/* A saved floating box, moved onto `output` when it was saved on another one: the same
+ * place relative to the usable area, kept inside it. A box already on `output` only moves
+ * if it sticks out past the edge. */
+static struct wlr_box rebase_box(struct sh_server *server, struct wlr_box box,
+                                 struct wlr_output *output) {
+    if (!output || box.width <= 0 || box.height <= 0)
+        return box;
+    struct wlr_output *from = box_output(server, box);
+    struct wlr_box full, shared;
+    wlr_output_layout_get_box(server->output_layout, output, &full);
+    if (from == output && wlr_box_intersection(&shared, &box, &full) &&
+        wlr_box_equal(&shared, &box))
+        return box;
+    struct sh_rect area = usable_area(server, output);
+    if (from && from != output) {
+        struct sh_rect old = usable_area(server, from);
+        box.x += area.x - old.x;
+        box.y += area.y - old.y;
+    }
+    box.width = fmin(box.width, area.width);
+    box.height = fmin(box.height, area.height);
+    box.x = fmax(area.x, fmin(box.x, area.x + area.width - box.width));
+    box.y = fmax(area.y, fmin(box.y, area.y + area.height - box.height));
+    return box;
+}
+
 static void restore_toplevel(struct sh_toplevel *toplevel) {
     if (!toplevel->arranged)
         return;
+    struct wlr_output *output = toplevel_output(toplevel);
     toplevel->arranged = false;
     toplevel_set_states(toplevel, false, 0);
+    toplevel->restore_box = rebase_box(toplevel->server, toplevel->restore_box, output);
     toplevel_configure_box(toplevel, toplevel->restore_box);
-}
-
-static struct wlr_output *toplevel_output(struct sh_toplevel *toplevel) {
-    struct sh_server *server = toplevel->server;
-    struct wlr_output *output = wlr_output_layout_output_at(
-        server->output_layout, toplevel->scene_tree->node.x, toplevel->scene_tree->node.y);
-    return output ? output : first_output(server);
 }
 
 static void place_maximized(struct sh_toplevel *toplevel) {
@@ -2262,7 +2333,7 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     }
     // A tiled window placed by hand floats from then on.
     if (focused->tiled) {
-        focused->floating = true;
+        focused->floating = focused->placed = true;
         untile_toplevel(focused, false);
     }
     struct wlr_output *output = toplevel_output(focused);
@@ -2367,7 +2438,7 @@ static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *outpu
     if (!toplevel->arranged)
         toplevel->restore_box =
             toplevel->fullscreen ? toplevel->fullscreen_restore : toplevel_box(toplevel);
-    toplevel->arranged = false;
+    toplevel->arranged = toplevel->placed = false;
     toplevel->tiled = true;
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
@@ -2387,6 +2458,9 @@ static void untile_toplevel(struct sh_toplevel *toplevel, bool restore) {
     toplevel->tiled = false;
     toplevel->arranged = !restore;
     toplevel->arrangement = SH_NONE;
+    // The floating geometry was saved where the window entered the tiling, maybe elsewhere.
+    if (restore)
+        toplevel->restore_box = rebase_box(server, toplevel->restore_box, output);
     if (restore && toplevel->fullscreen) {
         toplevel->fullscreen_restore = toplevel->restore_box;
     } else if (restore) {
@@ -2395,6 +2469,24 @@ static void untile_toplevel(struct sh_toplevel *toplevel, bool restore) {
     }
     if (output && server->tiling_enabled)
         reflow_output(server, output);
+}
+
+/* Tiles of an output disabled in the config join the tiling of the output they are nearest
+ * now. Those of an unplugged output wait for it: monitors drop off when they sleep. */
+static void rehome_tiles(struct sh_server *server) {
+    if (!first_output(server))
+        return;
+    bool moved = false;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each_reverse(toplevel, &server->toplevels, link) {
+        if (!toplevel->tiled || tiled_output(toplevel))
+            continue;
+        untile_toplevel(toplevel, false);
+        tile_toplevel(toplevel, NULL, NULL, false);
+        moved = true;
+    }
+    if (moved)
+        refit_fullscreen(server); // Fullscreen tiles follow to their new output.
 }
 
 static void set_tiling(struct sh_server *server, bool enabled) {
@@ -2433,7 +2525,7 @@ static void foreign_maximize(struct wl_listener *listener, void *data) {
         return;
     }
     if (toplevel->tiled) {
-        toplevel->floating = true;
+        toplevel->floating = toplevel->placed = true;
         untile_toplevel(toplevel, false);
     }
     place_maximized(toplevel);
@@ -2806,6 +2898,7 @@ static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode 
         return;
     }
 
+    server->grab_output = toplevel_output(toplevel);
     // Resizing a tile moves its splits; moving one lifts it out until it is dropped.
     bool tiled_resize = toplevel->tiled && mode == SH_CURSOR_RESIZE;
     bool retile = toplevel->tiled && mode == SH_CURSOR_MOVE;
@@ -2925,6 +3018,8 @@ static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen) {
     if (fullscreen) {
         fit_fullscreen(toplevel);
     } else {
+        toplevel->fullscreen_restore =
+            rebase_box(server, toplevel->fullscreen_restore, toplevel_output(toplevel));
         toplevel_configure_box(toplevel, toplevel->fullscreen_restore);
         wlr_scene_node_reparent(&toplevel->scene_tree->node, server->windows);
         // The usable area may have changed while this window covered the output.
