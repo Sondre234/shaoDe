@@ -49,8 +49,9 @@ shaoDe before it can be imported, **won't** = deliberately not carried over.
 | Scale | `monitor = …, 1.25` | `outputs.monitors[NAME].scale` | done | no |
 | Disable an output | `monitor = NAME, disable` | `outputs.monitors[NAME].enabled` | done | no |
 | Transform / rotation | `transform, N` | `outputs.monitors[NAME].transform` | done | no |
-| Match by description | `desc:…` | — | missing | no |
-| VRR, 10-bit, mirroring | `vrr`, `bitdepth`, `mirror` | — | missing | no |
+| Match by description | `desc:…` | `outputs.monitors["desc:…"]` | done (untested on hardware) | no |
+| Variable refresh rate | `vrr` | `outputs.monitors[NAME].vrr` | done (untested on hardware) | no |
+| 10-bit color, mirroring | `bitdepth`, `mirror` | — | missing | no |
 
 ### Colors and wallpaper
 

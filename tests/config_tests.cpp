@@ -87,6 +87,13 @@ int main(int argc, char **argv) {
         rejects("return {outputs={monitors={X={position={x=1}}}}}");
         rejects("return {outputs={monitors={X={position={x=1,y=2,z=3}}}}}");
         rejects("return {outputs={monitors={X={refresh=60}}}}");
+        auto described = shaode::parse_config(
+            "return {outputs={monitors={['desc:ASUSTek COMPUTER INC VG27AQ3A']={vrr=true}}}}");
+        require(std::string(described.settings.monitors[0].name) ==
+                        "desc:ASUSTek COMPUTER INC VG27AQ3A" &&
+                    described.settings.monitors[0].vrr,
+                "description key or vrr not parsed");
+        rejects("return {outputs={monitors={X={vrr='on'}}}}");
         require(shaode::parse_action("workspace_next") == SH_WORKSPACE_NEXT,
                 "control action names differ from Lua");
         rejects("return {bindings={{mods={'Alt'},key='1',action='workspace'}}}");

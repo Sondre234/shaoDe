@@ -166,7 +166,10 @@ outputs = {
 
 `mode` is `WIDTHxHEIGHT` or `WIDTHxHEIGHT@HZ`; the closest refresh rate at that
 resolution wins. `scale` is fractional, `transform` takes Hyprland's (and Wayland's)
-0–7, and `enabled = false` turns a monitor off (never the last one). Monitors with a
+0–7, and `enabled = false` turns a monitor off (never the last one), and `vrr = true` enables
+adaptive sync where the monitor supports it. A key such as `["desc:ASUSTek COMPUTER INC
+VG27AQ3A"]` matches the start of a monitor's "make model serial" (listed by `shaode msg get
+outputs`), as Hyprland's `desc:` does; a connector-name key wins over it. Monitors with a
 `position` go there, in logical pixels after scaling; the rest follow in a row to their
 right. `shaode msg get outputs` prints what each monitor ended up with. Reloading
 applies changes without restarting.
@@ -179,7 +182,7 @@ A control socket runs any Lua action from scripts or other tools:
 `shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. The query
 `shaode msg get workspace` prints the current workspace, `shaode msg get tiling` prints
 `on` or `off`, `shaode msg get outputs` prints one tab-separated line per monitor (name,
-enabled, x, y, logical width and height, scale, transform, and mode), and
+enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
 `shaode msg get windows` prints one tab-separated line per window:
 workspace, focused, minimized, tiled, x, y, width, height, app ID, and title. A client
 that sends `subscribe` keeps its connection and receives `tiling on|off` and

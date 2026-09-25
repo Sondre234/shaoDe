@@ -1753,13 +1753,35 @@ static bool output_listed(const struct sh_settings *settings, const struct sh_ou
     return false;
 }
 
+/* "make model serial", which outputs.monitors can match with a "desc:" prefix. */
+static void output_description(const struct wlr_output *output, char *text, size_t size) {
+    snprintf(text, size, "%s %s %s", output->make ? output->make : "",
+             output->model ? output->model : "", output->serial ? output->serial : "");
+}
+
+/* A "desc:" key matches the start of the output's description, as Hyprland's does. */
+static bool monitor_matches(const struct sh_monitor *monitor, const struct wlr_output *output) {
+    if (strncmp(monitor->name, "desc:", 5) != 0)
+        return strcmp(monitor->name, output->name) == 0;
+    char description[256];
+    output_description(output, description, sizeof(description));
+    const char *prefix = monitor->name + 5;
+    return *prefix && strncmp(description, prefix, strlen(prefix)) == 0;
+}
+
+/* Settings by connector name win over a description match. */
 static const struct sh_monitor *monitor_settings(const struct sh_settings *settings,
                                                  const struct wlr_output *output) {
+    const struct sh_monitor *described = NULL;
     for (int i = 0; i < settings->monitor_count; ++i) {
-        if (strcmp(settings->monitors[i].name, output->name) == 0)
-            return &settings->monitors[i];
+        const struct sh_monitor *monitor = &settings->monitors[i];
+        if (!monitor_matches(monitor, output))
+            continue;
+        if (strncmp(monitor->name, "desc:", 5) != 0)
+            return monitor;
+        described = described ? described : monitor;
     }
-    return NULL;
+    return described;
 }
 
 /* Adds the output to the layout at x, y, or moves it there. */
@@ -1893,6 +1915,11 @@ static void configure_output(struct sh_server *server, struct sh_output *output)
         enum wl_output_transform transform = monitor ? monitor->transform : 0;
         if (transform != wlr_output->transform)
             wlr_output_state_set_transform(&state, transform);
+        // Outputs that cannot switch it (nested ones report it on) are left alone.
+        bool vrr = monitor && monitor->vrr;
+        if (wlr_output->adaptive_sync_supported &&
+            vrr != (wlr_output->adaptive_sync_status == WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED))
+            wlr_output_state_set_adaptive_sync_enabled(&state, vrr);
     }
     if (state.committed != 0 && !wlr_output_test_state(wlr_output, &state)) {
         // Fall back to the defaults; a new monitor must still light up.
@@ -2013,6 +2040,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     add_listener(&wlr_output->events.destroy, &output->destroy, output_destroy);
 
     wl_list_init(&output->link);
+    char description[256];
+    output_description(wlr_output, description, sizeof(description));
+    wlr_log(WLR_INFO, "Output %s: %s", wlr_output->name, description);
     configure_output(server, output);
     if (wlr_output_is_wl(wlr_output))
         wlr_wl_output_set_title(wlr_output, "shaoDe — nested desktop");
@@ -3213,11 +3243,12 @@ static void control_describe_output(struct sh_server *server, int fd, struct sh_
     struct wlr_box box = {0};
     if (!output->disabled)
         wlr_output_layout_get_box(server->output_layout, o, &box);
-    char line[256];
-    // name, enabled, x, y, logical width, height, scale, transform, mode — one per line.
-    snprintf(line, sizeof(line), "%s\t%d\t%d\t%d\t%d\t%d\t%g\t%d\t%dx%d@%.3f\n", o->name,
+    char line[512], description[256];
+    output_description(o, description, sizeof(description));
+    // name, enabled, x, y, logical width, height, scale, transform, mode, description.
+    snprintf(line, sizeof(line), "%s\t%d\t%d\t%d\t%d\t%d\t%g\t%d\t%dx%d@%.3f\t%s\n", o->name,
              !output->disabled, box.x, box.y, box.width, box.height, o->scale, o->transform,
-             o->width, o->height, o->refresh / 1000.0);
+             o->width, o->height, o->refresh / 1000.0, description);
     control_reply(fd, line);
 }
 

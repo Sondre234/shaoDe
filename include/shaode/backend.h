@@ -36,9 +36,10 @@ enum sh_action {
 enum sh_modifier { SH_SHIFT = 1, SH_CTRL = 4, SH_ALT = 8, SH_LOGO = 64 };
 enum sh_edge { SH_EDGE_TOP = 1, SH_EDGE_BOTTOM = 2, SH_EDGE_LEFT = 4, SH_EDGE_RIGHT = 8 };
 
-/* Settings for one output, matched by connector name. Zero fields keep the defaults. */
+/* Settings for one output, matched by connector name, or by "desc:" and the start of its
+ * "make model serial". Zero fields keep the defaults. */
 struct sh_monitor {
-    char name[32];
+    char name[128];
     bool enabled;
     int width, height; /* 0: the preferred resolution */
     int refresh;       /* mHz; 0: the fastest at that resolution */
@@ -46,6 +47,7 @@ struct sh_monitor {
     bool positioned;   /* x, y are layout coordinates before the primary output shift */
     int x, y;
     int transform; /* enum wl_output_transform, which Hyprland's numbering matches */
+    bool vrr;      /* adaptive sync, where the monitor supports it */
 };
 
 struct sh_settings {

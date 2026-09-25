@@ -284,7 +284,7 @@ void read_monitors(lua_State *L, sh_settings &settings) {
             fail("output name is empty");
         copy_text(name, monitor.name, "output name");
         table(L, -1, "monitor settings");
-        keys(L, -1, {"enabled", "mode", "scale", "position", "transform"});
+        keys(L, -1, {"enabled", "mode", "scale", "position", "transform", "vrr"});
         monitor.enabled = true;
         boolean(L, "enabled", "enabled", monitor.enabled);
         lua_getfield(L, -1, "mode");
@@ -293,6 +293,7 @@ void read_monitors(lua_State *L, sh_settings &settings) {
         lua_pop(L, 1);
         monitor.scale = static_cast<float>(number(L, "scale", 0, 0.25, 10));
         monitor.transform = integer(L, "transform", 0, 0, 7);
+        boolean(L, "vrr", "vrr", monitor.vrr);
         lua_getfield(L, -1, "position");
         if (!lua_isnil(L, -1)) {
             table(L, -1, "position");
