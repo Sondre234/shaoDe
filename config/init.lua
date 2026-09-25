@@ -15,6 +15,7 @@ return {
     -- keyboard = { layout = "us", options = "", repeat_rate = 25, repeat_delay = 600 },
     mouse = {
         modifier = mod, -- modifier + left drag moves; right drag resizes
+        -- focus_follows = true, -- hovering a window focuses it (without raising it)
         -- Standalone sessions only; unset keeps each device's default:
         -- speed = 0.0 (-1 to 1), acceleration = "flat" or "adaptive", natural_scroll = false
     },

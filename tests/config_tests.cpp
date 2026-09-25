@@ -133,16 +133,19 @@ int main(int argc, char **argv) {
                 "window defaults changed");
         rejects("return {windows={border_width=21}}");
         auto input = shaode::parse_config(
-            "return {mouse={speed=-0.5,acceleration='flat',natural_scroll=false},"
+            "return {mouse={speed=-0.5,acceleration='flat',natural_scroll=false,"
+            "focus_follows=false},"
             "touchpad={natural_scroll=true,tap_to_click=true,disable_while_typing=false}}");
         const auto &is = input.settings;
         require(is.pointer_speed_set && is.pointer_speed == -0.5 && is.pointer_accel == 0 &&
                     is.mouse_natural_scroll == 0 && is.touchpad_natural_scroll == 1 &&
-                    is.touchpad_tap == 1 && is.touchpad_dwt == 0 && is.mouse_modifier == SH_ALT,
+                    is.touchpad_tap == 1 && is.touchpad_dwt == 0 && is.mouse_modifier == SH_ALT &&
+                    !is.focus_follows_mouse,
                 "pointer settings not parsed");
         const auto &defaults = opaque.settings;
         require(!defaults.pointer_speed_set && defaults.pointer_accel == -1 &&
-                    defaults.mouse_natural_scroll == -1 && defaults.touchpad_tap == -1,
+                    defaults.mouse_natural_scroll == -1 && defaults.touchpad_tap == -1 &&
+                    defaults.focus_follows_mouse,
                 "pointer defaults must leave devices alone");
         rejects("return {mouse={speed=2}}");
         rejects("return {mouse={acceleration='fast'}}");

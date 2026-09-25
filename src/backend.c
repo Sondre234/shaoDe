@@ -68,6 +68,7 @@
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_dialog_v1.h>
 #include <wlr/types/wlr_xdg_foreign_registry.h>
 #include <wlr/types/wlr_xdg_foreign_v1.h>
@@ -129,7 +130,8 @@ struct sh_server {
     int workspace; // current workspace, from 0
     struct sh_tiling *tiling;
     bool tiling_enabled;
-    bool grab_retile; // the grabbed window left the tiling to be moved; retile it on drop
+    bool grab_retile;     // the grabbed window left the tiling to be moved; retile it on drop
+    bool grab_fullscreen; // the grabbed window is fullscreen until it is dragged far enough
 
     int control_fd;
     struct wl_list subscribers; // control clients receiving state changes
@@ -163,6 +165,7 @@ struct sh_server {
     struct wlr_scene_output_layout *scene_layout;
     struct wl_listener new_xdg_toplevel;
     struct wl_listener new_xdg_popup;
+    struct wl_listener new_decoration;
     struct wl_list toplevels;
 
     struct wlr_cursor *cursor;
@@ -238,6 +241,9 @@ struct sh_toplevel {
     bool fullscreen;
     struct wlr_box fullscreen_restore;
     struct wl_listener request_minimize;
+    /* xdg-decoration: the window leaves its title bar to us and gets the pill instead. */
+    struct wlr_xdg_toplevel_decoration_v1 *decoration;
+    struct wl_listener decoration_mode, decoration_destroy;
     struct wlr_box restore_box;
     bool arranged;
     bool tiled;    // in the tiling tree; restore_box keeps its floating geometry
@@ -524,7 +530,8 @@ static void deactivate_toplevel(struct sh_server *server) {
     refresh_frame(old);
 }
 
-static void focus_toplevel(struct sh_toplevel *toplevel) {
+/* Gives the window keyboard focus; `raise` also brings it to the front. */
+static void focus_toplevel_raise(struct sh_toplevel *toplevel, bool raise) {
     if (!toplevel || toplevel->server->locked)
         return;
     struct sh_server *server = toplevel->server;
@@ -543,9 +550,11 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
         tile_toplevel(toplevel, NULL, NULL, false);
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
     // Panels stay reachable once a fullscreen window loses focus.
-    wlr_scene_node_reparent(&toplevel->scene_tree->node,
-                            toplevel->fullscreen ? server->fullscreen : server->windows);
-    wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+    if (raise || toplevel->fullscreen) {
+        wlr_scene_node_reparent(&toplevel->scene_tree->node,
+                                toplevel->fullscreen ? server->fullscreen : server->windows);
+        wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+    }
     wl_list_remove(&toplevel->link);
     wl_list_insert(&server->toplevels, &toplevel->link);
     toplevel_set_activated(toplevel, true);
@@ -558,6 +567,25 @@ static void focus_toplevel(struct sh_toplevel *toplevel) {
     if (keyboard && toplevel_accepts_keyboard(toplevel))
         wlr_seat_keyboard_notify_enter(seat, toplevel_surface(toplevel), keyboard->keycodes,
                                        keyboard->num_keycodes, &keyboard->modifiers);
+}
+
+static void focus_toplevel(struct sh_toplevel *toplevel) { focus_toplevel_raise(toplevel, true); }
+
+/* Whether hovering `toplevel` may focus it: not during a drag, a popup or menu grab, or while
+ * a panel or launcher holds the keyboard. */
+static bool hover_focuses(struct sh_server *server, struct sh_toplevel *toplevel) {
+    struct wlr_seat *seat = server->seat;
+    if (!server_settings(server)->focus_follows_mouse || server->locked ||
+        toplevel == server->focused_toplevel || server->focused_layer ||
+        !toplevel_visible(toplevel) || seat->pointer_state.button_count > 0 ||
+        wlr_seat_pointer_has_grab(seat) || wlr_seat_keyboard_has_grab(seat))
+        return false;
+#if WLR_HAS_XWAYLAND
+    // X11 menus are override-redirect windows that grab inside the X server, unseen here.
+    if (toplevel->unmanaged || !wl_list_empty(&server->unmanaged->children))
+        return false;
+#endif
+    return true;
 }
 
 static void focus_previous(struct sh_server *server) {
@@ -1148,21 +1176,54 @@ static void reset_cursor_mode(struct sh_server *server) {
     server->cursor_mode = SH_CURSOR_PASSTHROUGH;
     server->grabbed_toplevel = NULL;
     server->grab_retile = false;
+    server->grab_fullscreen = false;
 }
 
-/* Dropping a window dragged out of the tiling splits the tile under the pointer. */
+/* A window dropped over the top edge of its output, or over a panel along it. */
+static bool dropped_at_top(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    struct wlr_output *output =
+        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
+    if (!output)
+        return false;
+    int top = toplevel->scene_tree->node.y + toplevel_geometry(toplevel).y;
+    return top < usable_area(server, output).y;
+}
+
+/* Dropping a window dragged out of the tiling splits the tile under the pointer; dropping one
+ * at the top of the screen also makes it fullscreen. */
 static void finish_grab(struct sh_server *server) {
     struct sh_toplevel *toplevel = server->grabbed_toplevel;
+    bool fullscreen = toplevel && server->cursor_mode == SH_CURSOR_MOVE &&
+                      !server->grab_fullscreen && dropped_at_top(toplevel);
     if (server->grab_retile && toplevel && wants_tiling(toplevel))
         tile_toplevel(toplevel,
                       wlr_output_layout_output_at(server->output_layout, server->cursor->x,
                                                   server->cursor->y),
                       NULL, true);
     server->grab_retile = false;
+    if (fullscreen)
+        set_fullscreen(toplevel, true);
 }
+
+/* Pointer travel that turns a press on a fullscreen window into a drag out of fullscreen. */
+#define SH_DRAG_THRESHOLD 8
 
 static void process_cursor_move(struct sh_server *server) {
     struct sh_toplevel *toplevel = server->grabbed_toplevel;
+    if (server->grab_fullscreen) {
+        if (hypot(server->cursor->x - server->grab_x, server->cursor->y - server->grab_y) <
+            SH_DRAG_THRESHOLD)
+            return;
+        // Leave fullscreen, then drag the window at the size it had before, like a snapped one.
+        reset_cursor_mode(server);
+        set_fullscreen(toplevel, false);
+        if (!toplevel->arranged && !toplevel->tiled) {
+            toplevel->restore_box = toplevel_box(toplevel);
+            toplevel->arranged = true;
+        }
+        begin_interactive(toplevel, SH_CURSOR_MOVE, 0);
+    }
     toplevel_set_position(toplevel, server->cursor->x - server->grab_x,
                           server->cursor->y - server->grab_y);
 }
@@ -1213,6 +1274,9 @@ static void process_cursor_resize(struct sh_server *server) {
 }
 
 static bool wants_decoration(struct sh_toplevel *toplevel) {
+    if (toplevel->decoration)
+        return toplevel->decoration->current.mode ==
+               WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
 #if WLR_HAS_XWAYLAND
     // X11 windows that leave decorations to the window manager (Spotify, for one).
     return toplevel->xsurface && !toplevel->unmanaged &&
@@ -1235,9 +1299,21 @@ static struct wlr_buffer *deco_buffer(struct sh_server *server, bool hovered) {
     return server->deco_buffers[hovered];
 }
 
-/* Over a fullscreen window the pill hides until the pointer nears its corner. */
+/* The pill's place inside the window's scene tree: its top-right corner. */
+static void deco_position(struct sh_toplevel *toplevel, int *x, int *y) {
+    struct wlr_box geometry = toplevel_geometry(toplevel);
+    *x = geometry.x + geometry.width - SH_DECO_MARGIN - SH_DECO_WIDTH;
+    if (*x < geometry.x + SH_DECO_MARGIN)
+        *x = geometry.x + SH_DECO_MARGIN;
+    *y = geometry.y + SH_DECO_MARGIN;
+}
+
+/* The pill sits over the window's content, so it hides until the pointer nears its corner. */
 static bool in_deco_corner(struct sh_toplevel *toplevel, double x, double y) {
-    double left = toplevel->scene_tree->node.x, top = toplevel->scene_tree->node.y;
+    int dx, dy;
+    deco_position(toplevel, &dx, &dy);
+    double left = toplevel->scene_tree->node.x + dx - SH_DECO_MARGIN;
+    double top = toplevel->scene_tree->node.y + dy - SH_DECO_MARGIN;
     return x >= left && y >= top && x < left + 2 * SH_DECO_MARGIN + SH_DECO_WIDTH &&
            y < top + 2 * SH_DECO_MARGIN + SH_DECO_HEIGHT;
 }
@@ -1247,7 +1323,7 @@ static void refresh_decoration(struct sh_toplevel *toplevel) {
     struct sh_server *server = toplevel->server;
     if (!toplevel->scene_tree)
         return;
-    if (!wants_decoration(toplevel)) {
+    if (!toplevel_mapped(toplevel) || !wants_decoration(toplevel)) {
         if (toplevel->deco)
             wlr_scene_node_destroy(&toplevel->deco->node);
         toplevel->deco = NULL;
@@ -1262,15 +1338,14 @@ static void refresh_decoration(struct sh_toplevel *toplevel) {
         if (!toplevel->deco)
             return;
         wlr_scene_buffer_set_dest_size(toplevel->deco, SH_DECO_WIDTH, SH_DECO_HEIGHT);
-    } else {
+    } else if (toplevel->deco->buffer != buffer) {
         wlr_scene_buffer_set_buffer(toplevel->deco, buffer);
     }
-    struct wlr_box geometry = toplevel_geometry(toplevel);
-    wlr_scene_node_set_position(&toplevel->deco->node, geometry.x + SH_DECO_MARGIN,
-                                geometry.y + SH_DECO_MARGIN);
+    int x, y;
+    deco_position(toplevel, &x, &y);
+    wlr_scene_node_set_position(&toplevel->deco->node, x, y);
     wlr_scene_node_raise_to_top(&toplevel->deco->node);
-    wlr_scene_node_set_enabled(&toplevel->deco->node,
-                               !toplevel->fullscreen || server->deco_revealed == toplevel);
+    wlr_scene_node_set_enabled(&toplevel->deco->node, server->deco_revealed == toplevel);
 }
 
 static void set_buffer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data) {
@@ -1302,6 +1377,7 @@ static void refresh_frame(struct sh_toplevel *toplevel) {
         toplevel->opacity = opacity;
         wlr_scene_node_for_each_buffer(&toplevel->scene_tree->node, set_buffer_opacity, toplevel);
     }
+    refresh_decoration(toplevel); // the pill follows the window's width
 
     // xdg-shell windows keep their scene tree while unmapped; the border must not.
     int b = settings->border_width;
@@ -1333,8 +1409,6 @@ static void refresh_frame(struct sh_toplevel *toplevel) {
         wlr_scene_rect_set_size(toplevel->border[i], sides[i].width, sides[i].height);
         wlr_scene_node_raise_to_top(&toplevel->border[i]->node);
     }
-    if (toplevel->deco)
-        wlr_scene_node_raise_to_top(&toplevel->deco->node);
 }
 
 static void forget_decoration(struct sh_toplevel *toplevel) {
@@ -1345,7 +1419,10 @@ static void forget_decoration(struct sh_toplevel *toplevel) {
         server->deco_revealed = NULL;
     if (server->deco_pressed == toplevel)
         server->deco_pressed = NULL;
-    toplevel->deco = NULL; // destroyed with the scene tree
+    // X11 windows lose it with their scene tree; xdg-shell ones keep theirs while unmapped.
+    if (toplevel->xdg_toplevel && toplevel->deco)
+        wlr_scene_node_destroy(&toplevel->deco->node);
+    toplevel->deco = NULL;
 }
 
 /* The window whose pill is at (x, y), and which part of it. */
@@ -1423,11 +1500,13 @@ static void process_cursor_motion(struct sh_server *server, uint32_t time) {
     struct wlr_surface *surface = NULL;
     struct sh_toplevel *toplevel =
         desktop_toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-    if (toplevel && toplevel->deco && toplevel->fullscreen && !server->deco_revealed &&
+    if (toplevel && toplevel->deco && !server->deco_revealed &&
         in_deco_corner(toplevel, server->cursor->x, server->cursor->y)) {
         server->deco_revealed = toplevel;
         refresh_decoration(toplevel);
     }
+    if (toplevel && hover_focuses(server, toplevel))
+        focus_toplevel_raise(toplevel, false);
     if (surface) {
         wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
         wlr_seat_pointer_notify_motion(seat, time, sx, sy);
@@ -2629,6 +2708,9 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 
     if (toplevel->xdg_toplevel->base->initial_commit) {
         wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+        if (toplevel->decoration)
+            wlr_xdg_toplevel_decoration_v1_set_mode(
+                toplevel->decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     } else if (toplevel->xdg_toplevel->base->surface->mapped) {
         refresh_frame(toplevel);
     }
@@ -2649,6 +2731,11 @@ static void free_toplevel(struct sh_toplevel *toplevel) {
 
 static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, destroy);
+    // The decoration outlives this listener: it hears the same signal later.
+    if (toplevel->decoration) {
+        wl_list_remove(&toplevel->decoration_mode.link);
+        wl_list_remove(&toplevel->decoration_destroy.link);
+    }
     wl_list_remove(&toplevel->map.link);
     wl_list_remove(&toplevel->unmap.link);
     wl_list_remove(&toplevel->commit.link);
@@ -2658,8 +2745,17 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges) {
     struct sh_server *server = toplevel->server;
-    if (toplevel->fullscreen)
+    if (toplevel->fullscreen) {
+        // Only a move, and it leaves fullscreen once the pointer has travelled a little.
+        if (mode != SH_CURSOR_MOVE)
+            return;
+        server->grabbed_toplevel = toplevel;
+        server->cursor_mode = mode;
+        server->grab_fullscreen = true;
+        server->grab_x = server->cursor->x;
+        server->grab_y = server->cursor->y;
         return;
+    }
 
     // Resizing a tile moves its splits; moving one lifts it out until it is dropped.
     bool tiled_resize = toplevel->tiled && mode == SH_CURSOR_RESIZE;
@@ -2830,6 +2926,41 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
                  xdg_toplevel_request_fullscreen);
     add_listener(&xdg_toplevel->events.request_minimize, &toplevel->request_minimize,
                  toplevel_request_minimize);
+}
+
+/* Every window that asks is decorated by the server: no title bar, just the pill. The mode is
+ * sent with the first configure, or right away once the window has had one. */
+static void decoration_set_mode(struct sh_toplevel *toplevel) {
+    if (toplevel->xdg_toplevel->base->initialized)
+        wlr_xdg_toplevel_decoration_v1_set_mode(toplevel->decoration,
+                                                WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+
+static void decoration_request_mode(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, decoration_mode);
+    decoration_set_mode(toplevel);
+}
+
+static void decoration_destroy(struct wl_listener *listener, void *data) {
+    struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, decoration_destroy);
+    wl_list_remove(&toplevel->decoration_mode.link);
+    wl_list_remove(&toplevel->decoration_destroy.link);
+    toplevel->decoration = NULL;
+    refresh_decoration(toplevel);
+}
+
+static void server_new_decoration(struct wl_listener *listener, void *data) {
+    struct wlr_xdg_toplevel_decoration_v1 *decoration = data;
+    struct wlr_scene_tree *tree = decoration->toplevel->base->data;
+    struct sh_node *node = tree ? tree->node.data : NULL;
+    if (!node || node->kind != SH_NODE_TOPLEVEL)
+        return;
+    struct sh_toplevel *toplevel = node->owner;
+    toplevel->decoration = decoration;
+    add_listener(&decoration->events.request_mode, &toplevel->decoration_mode,
+                 decoration_request_mode);
+    add_listener(&decoration->events.destroy, &toplevel->decoration_destroy, decoration_destroy);
+    decoration_set_mode(toplevel);
 }
 
 #if WLR_HAS_XWAYLAND
@@ -3606,6 +3737,10 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     add_listener(&xdg_shell->events.new_toplevel, &server.new_xdg_toplevel,
                  server_new_xdg_toplevel);
     add_listener(&xdg_shell->events.new_popup, &server.new_xdg_popup, server_new_xdg_popup);
+    struct wlr_xdg_decoration_manager_v1 *decorations =
+        wlr_xdg_decoration_manager_v1_create(server.wl_display);
+    add_listener(&decorations->events.new_toplevel_decoration, &server.new_decoration,
+                 server_new_decoration);
 
     server.cursor = wlr_cursor_create();
     wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
@@ -3715,6 +3850,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
 
     wl_list_remove(&server.new_xdg_toplevel.link);
     wl_list_remove(&server.new_xdg_popup.link);
+    wl_list_remove(&server.new_decoration.link);
     wl_list_remove(&server.new_layer_surface.link);
 
     wl_list_remove(&server.cursor_motion.link);

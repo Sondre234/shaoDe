@@ -381,7 +381,8 @@ Config read(lua_State *L) {
         config.settings.repeat_delay = integer(L, "repeat_delay", 600, 0, 5000);
     }
     lua_pop(L, 1);
-    if (section(L, "mouse", {"modifier", "speed", "acceleration", "natural_scroll"})) {
+    if (section(L, "mouse",
+                {"modifier", "speed", "acceleration", "natural_scroll", "focus_follows"})) {
         lua_getfield(L, -1, "modifier");
         if (!lua_isnil(L, -1))
             config.settings.mouse_modifier = modifier(string(L, -1, "modifier"));
@@ -399,6 +400,7 @@ Config read(lua_State *L) {
         }
         lua_pop(L, 1);
         tristate(L, "natural_scroll", "mouse.natural_scroll", config.settings.mouse_natural_scroll);
+        boolean(L, "focus_follows", "mouse.focus_follows", config.settings.focus_follows_mouse);
     }
     lua_pop(L, 1);
     if (section(L, "touchpad", {"natural_scroll", "tap_to_click", "disable_while_typing"})) {

@@ -9,7 +9,7 @@ This is an early development project, not a replacement desktop session yet.
 
 ## Build and run
 
-The first working compositor supports real Wayland applications, click-to-focus,
+The first working compositor supports real Wayland applications, focus follows mouse,
 mouse move/resize, configurable shortcuts, half-screen snapping, maximize/restore,
 a one-shot grid arrangement, automatic dwindle tiling that can be switched on and
 off, workspaces, and Lua reload. It uses a TinyWL-derived C adapter
@@ -81,10 +81,16 @@ them: a host that grabs Super (Hyprland, GNOME) keeps these, so set `mod = "Alt"
 the Lua file for nested sessions. SIGHUP also requests a reload, and
 SIGINT/SIGTERM requests shutdown. A reload does not rerun startup commands.
 
-Windows that leave decorations to the window manager (X11 applications such as Spotify)
-get three small macOS-style dots over their top-left corner: close, minimize, and
-fullscreen. Dragging the pill around the dots moves the window; over a fullscreen window
-the dots appear when the pointer nears that corner. Other windows decorate themselves.
+Windows that leave decorations to the window manager (Wayland applications that support
+server-side decorations, such as kitty, and X11 applications such as Spotify) get no title
+bar. Instead, three small macOS-style dots sit over their top-right corner (close, minimize,
+and fullscreen) and appear when the pointer nears that corner, so they never cover text.
+Dragging the pill around the dots moves the window. Other windows decorate themselves.
+
+Dropping a dragged window over the top edge of the screen, or over a panel along it, makes
+it fullscreen; dragging a fullscreen window away restores its earlier size. Hovering a
+window focuses it without raising it (`mouse.focus_follows = false` turns this off), except
+while dragging, while a menu or popup is open, or while a panel or launcher has the keyboard.
 
 Limitations: snapping is keyboard-driven, without edge-drag previews. Fullscreen covers the panel while the window is focused;
 focusing another window lowers it behind the panel until it is refocused. Window

@@ -78,6 +78,7 @@ struct sh_settings {
     int pointer_accel;        /* -1 default, 0 flat, 1 adaptive */
     int mouse_natural_scroll; /* -1, 0, 1 */
     int touchpad_natural_scroll, touchpad_tap, touchpad_dwt;
+    bool focus_follows_mouse; /* hovering a window focuses it, without raising it */
 };
 
 struct sh_callbacks {

@@ -2,7 +2,7 @@
 #pragma once
 /* Window controls for windows that ask the compositor to decorate them: three small
  * macOS-style dots (close, minimize, fullscreen) on a translucent pill over the window's
- * top-left corner. Dragging the pill moves the window. */
+ * top-right corner. Dragging the pill moves the window. */
 #include <stdbool.h>
 
 struct wlr_buffer;
@@ -15,7 +15,7 @@ enum sh_deco_part {
     SH_DECO_FULLSCREEN,
 };
 
-/* Logical size of the pill and its inset from the window's top-left corner. */
+/* Logical size of the pill and its inset from the window's top-right corner. */
 enum { SH_DECO_MARGIN = 8, SH_DECO_WIDTH = 64, SH_DECO_HEIGHT = 22 };
 
 /* Renders the pill at `scale` pixels per logical pixel; `hovered` shows the glyphs in the

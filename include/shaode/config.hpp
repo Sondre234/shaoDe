@@ -73,7 +73,8 @@ struct Config {
                          .mouse_natural_scroll = -1,
                          .touchpad_natural_scroll = -1,
                          .touchpad_tap = -1,
-                         .touchpad_dwt = -1};
+                         .touchpad_dwt = -1,
+                         .focus_follows_mouse = true};
     std::vector<Binding> bindings;
     std::vector<Command> startup;
     ShellConfig shell;
