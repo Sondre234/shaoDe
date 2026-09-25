@@ -121,7 +121,8 @@ shaoDe before it can be imported, **won't** = deliberately not carried over.
 | Per-app opacity | `windowrule = opacity A B, class:…` | `windows.rules` (`app_id` regex) | done | yes |
 | Blur | `decoration:blur` | — | blocked: needs scenefx or a custom renderer | no |
 | Shadows | `decoration:shadow` | — | blocked: needs scenefx or a custom renderer | no |
-| Animations | `animation`, `bezier` | — | won't (for now) | — |
+| Animations on/off | `animations:enabled` | `animations.enabled` | done | yes |
+| Animation styles, speeds, curves | `animation`, `bezier` | — (fixed fade, scale, and glide; `animations.duration`) | won't (for now) | — |
 
 ### Input
 

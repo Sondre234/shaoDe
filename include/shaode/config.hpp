@@ -74,7 +74,9 @@ struct Config {
                          .touchpad_natural_scroll = -1,
                          .touchpad_tap = -1,
                          .touchpad_dwt = -1,
-                         .focus_follows_mouse = true};
+                         .focus_follows_mouse = true,
+                         .animations = true,
+                         .animation_duration = 120};
     std::vector<Binding> bindings;
     std::vector<Command> startup;
     ShellConfig shell;

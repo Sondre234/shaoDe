@@ -83,6 +83,8 @@ struct sh_settings {
     int mouse_natural_scroll; /* -1, 0, 1 */
     int touchpad_natural_scroll, touchpad_tap, touchpad_dwt;
     bool focus_follows_mouse; /* hovering a window focuses it, without raising it */
+    bool animations;          /* windows fade in and out, and tiles glide into place */
+    int animation_duration;   /* milliseconds */
 };
 
 struct sh_callbacks {

@@ -156,3 +156,15 @@ capture source. `compositor_smoke` checks that every one of these globals is adv
 Not yet exercised: screen sharing end to end through xdg-desktop-portal-wlr and
 PipeWire, the D-Bus environment export in a physical `--session`, drag-and-drop, pointer
 lock, and popup placement at output edges.
+
+## Window animation checkpoint
+
+Added 2026-09-25. `animation_smoke` runs a headless compositor with tiling and a
+1-second duration, and checks through `shaode msg get animations` that opening,
+the neighbour's glide, and the closing copy each run and then end, that closing copies
+leave no scene trees behind, that a reload turning animations off ends those running,
+and that quitting mid-animation exits cleanly. Under AddressSanitizer and
+LeakSanitizer the compositor exited without findings. `grim` screenshots of a headless
+session with foot showed the fade and scale on opening, the glide, and the closing
+copy fading out. Not yet seen on a real display: smoothness at 120 ms on high refresh
+rates, and GPU clients (dmabuf) closing.

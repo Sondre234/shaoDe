@@ -26,7 +26,7 @@ hl.config({
         },
     },
 })
-hl.config({ decoration = { inactive_opacity = 0.9 },
+hl.config({ decoration = { inactive_opacity = 0.9 }, animations = { enabled = false },
             input = { kb_layout = "us", touchpad = { ["tap-to-click"] = false } } })
 hl.window_rule({ name = "kitty", match = { class = "^kitty$" }, opacity = "0.9 0.8" })
 local zen = hl.window_rule({ match = { class = "^zen$" }, opacity = 0.5 })
