@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
 #include <signal.h>
@@ -136,6 +137,7 @@ struct sh_server {
         int current;
     } output_workspaces[16];
     char active_output[64];           // of the last focused window, switched workspace, or click
+    char placed_primary[32];          // the primary output the pointer was last put on, if any
     struct wlr_output *target_output; // set while a control request names an output
     struct sh_tiling *tiling;
     bool tiling_enabled;
@@ -223,8 +225,9 @@ struct sh_server {
 
 struct sh_output {
     struct wlr_box usable;
-    int x, y;      /* arrangement before the primary output shift */
-    bool disabled; /* listed in disabled_outputs */
+    int x, y;                /* arrangement before the shift to the layout origin */
+    struct wlr_box previous; /* where arrange_outputs found it; empty when newly added */
+    bool disabled;           /* listed in disabled_outputs */
     struct wlr_scene_rect *background, *lock_blank;
     bool lock_presented;
     struct wl_list link;
@@ -851,12 +854,10 @@ static void focus_direction(struct sh_server *server, enum sh_action action) {
         double along = horizontal ? x - from_x : y - from_y;
         if (along * sign <= 0)
             continue;
-        bool level = horizontal
-                         ? box.y < from.y + from.height && from.y < box.y + box.height
-                         : box.x < from.x + from.width && from.x < box.x + box.width;
+        bool level = horizontal ? box.y < from.y + from.height && from.y < box.y + box.height
+                                : box.x < from.x + from.width && from.x < box.x + box.width;
         double distance = hypot(x - from_x, y - from_y);
-        if (!best || (level && !best_level) ||
-            (level == best_level && distance < best_distance)) {
+        if (!best || (level && !best_level) || (level == best_level && distance < best_distance)) {
             best = toplevel;
             best_level = level;
             best_distance = distance;
@@ -2185,9 +2186,42 @@ static void layout_output(struct sh_server *server, struct wlr_output *wlr_outpu
     wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 }
 
+/* Moves the windows on `output` along with it, so they stay where they were on its screen.
+ * X11 windows are told their new place too. */
+static void follow_moved_output(struct sh_server *server, struct sh_output *output) {
+    struct wlr_box now;
+    wlr_output_layout_get_box(server->output_layout, output->wlr_output, &now);
+    int dx = now.x - output->previous.x, dy = now.y - output->previous.y;
+    if (wlr_box_empty(&output->previous) || wlr_box_empty(&now) || (dx == 0 && dy == 0))
+        return;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+#if WLR_HAS_XWAYLAND
+        if (toplevel->unmanaged)
+            continue;
+#endif
+        if (strcmp(toplevel->output, output->wlr_output->name) != 0)
+            continue;
+        if (toplevel->restore_box.width > 0) {
+            toplevel->restore_box.x += dx;
+            toplevel->restore_box.y += dy;
+        }
+        if (toplevel->fullscreen_restore.width > 0) {
+            toplevel->fullscreen_restore.x += dx;
+            toplevel->fullscreen_restore.y += dy;
+        }
+        if (toplevel_mapped(toplevel))
+            toplevel_set_position(toplevel, toplevel->scene_tree->node.x + dx,
+                                  toplevel->scene_tree->node.y + dy);
+    }
+}
+
 /* Outputs with a configured position go there. The rest sit side by side, top-aligned, to
  * the right of those: configured order first, then the order they appeared. Everything then
- * shifts so the primary output (if named) starts at 0, 0, where the cursor begins. */
+ * shifts so the layout starts at 0, 0: X11 has no place left of or above its root window,
+ * so X11 windows on a monitor at negative coordinates would get no input. Windows, and
+ * once running the pointer, move with their monitor; the pointer is put on the primary
+ * output (if named) when it appears. */
 static void arrange_outputs(struct sh_server *server) {
     const struct sh_settings *settings = server_settings(server);
     struct sh_output *output;
@@ -2218,15 +2252,33 @@ static void arrange_outputs(struct sh_server *server) {
             x += width;
         }
     }
-    int origin_x = 0, origin_y = 0;
+    int origin_x = INT_MAX, origin_y = INT_MAX;
     wl_list_for_each(output, &server->outputs, link) {
-        if (output_named(output, settings->primary_output)) {
-            origin_x = output->x;
-            origin_y = output->y;
-        }
+        origin_x = output->x < origin_x ? output->x : origin_x;
+        origin_y = output->y < origin_y ? output->y : origin_y;
+        wlr_output_layout_get_box(server->output_layout, output->wlr_output, &output->previous);
     }
+    struct wlr_output *pointed =
+        wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
+    struct wlr_box pointed_before = {0};
+    if (pointed)
+        wlr_output_layout_get_box(server->output_layout, pointed, &pointed_before);
     wl_list_for_each(output, &server->outputs, link)
         layout_output(server, output->wlr_output, output->x - origin_x, output->y - origin_y);
+    wl_list_for_each(output, &server->outputs, link) follow_moved_output(server, output);
+    struct wlr_output *primary = find_output(server, settings->primary_output);
+    struct wlr_box box;
+    if (primary && strcmp(server->placed_primary, settings->primary_output) != 0) {
+        wlr_output_layout_get_box(server->output_layout, primary, &box);
+        wlr_cursor_warp(server->cursor, NULL, box.x + box.width / 2.0, box.y + box.height / 2.0);
+    } else if (server->running && pointed &&
+               wlr_output_layout_get(server->output_layout, pointed)) {
+        wlr_output_layout_get_box(server->output_layout, pointed, &box);
+        wlr_cursor_warp(server->cursor, NULL, server->cursor->x + box.x - pointed_before.x,
+                        server->cursor->y + box.y - pointed_before.y);
+    }
+    snprintf(server->placed_primary, sizeof(server->placed_primary), "%s",
+             primary ? settings->primary_output : "");
     update_backgrounds(server);
     arrange_layers(server);
     refit_fullscreen(server);
@@ -3068,8 +3120,9 @@ static bool initial_tile_size(struct sh_toplevel *toplevel, int *width, int *hei
         return false;
     const struct sh_settings *settings = server_settings(server);
     struct sh_rect area = gap_area(settings, usable_area(server, output), SH_TILE), rect;
-    if (!sh_tiling_preview(server->tiling, output->name, *output_workspace(server, output->name), toplevel, target, true,
-                           server->cursor->x, server->cursor->y, area, settings->gap_inner, &rect))
+    if (!sh_tiling_preview(server->tiling, output->name, *output_workspace(server, output->name),
+                           toplevel, target, true, server->cursor->x, server->cursor->y, area,
+                           settings->gap_inner, &rect))
         return false;
     rect = inside_border(server, rect);
     *width = rect.width;

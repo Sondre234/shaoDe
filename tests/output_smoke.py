@@ -78,12 +78,13 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-test-") as directory:
             env["SHAODE_SOCKET"] = re.search(r"Control socket: (\S+)", text)[1]
             state = outputs()
             # 1600x900 at 1.25 is 1280x720 logical; the unpositioned rotated output follows
-            # the rightmost positioned one.
-            assert state["HEADLESS-1"] == (True, -1280, 100, 1280, 720, 1.25, 0,
+            # the rightmost positioned one. The layout shifts right by 1280 so it starts at 0:
+            # X11 windows get no input at negative coordinates.
+            assert state["HEADLESS-1"] == (True, 0, 100, 1280, 720, 1.25, 0,
                                            "1600x900@60.000"), state
-            assert state["HEADLESS-2"] == (True, 0, 0, 1920, 1080, 1.0, 0,
+            assert state["HEADLESS-2"] == (True, 1280, 0, 1920, 1080, 1.0, 0,
                                            "1920x1080@144.000"), state
-            assert state["HEADLESS-3"] == (True, 1920, 0, 1920, 1080, 1.0, 1,
+            assert state["HEADLESS-3"] == (True, 3200, 0, 1920, 1080, 1.0, 1,
                                            "1080x1920@0.000"), state
             assert advertised() == 3
 
@@ -106,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-test-") as directory:
             reload(FIRST, 3)
             state = outputs()
             assert all(enabled for enabled, *_ in state.values()), state
-            assert state["HEADLESS-2"][1:3] == (0, 0), state
+            assert state["HEADLESS-2"][1:3] == (1280, 0), state
             assert advertised() == 3
 
             server.send_signal(signal.SIGTERM)

@@ -182,8 +182,7 @@ and `_JAVA_AWT_WM_NONREPARENTING=1` unless they are already set.
 
 Monitors sit side by side, top-aligned. `outputs.order` lists connector names
 (such as `DP-3`) left to right; unlisted monitors follow on the right in the order
-they appear. `outputs.primary` puts that monitor at the layout origin, where the
-cursor starts. By default each monitor runs its preferred resolution at the fastest
+they appear. The cursor starts on `outputs.primary`, else on the leftmost monitor. By default each monitor runs its preferred resolution at the fastest
 refresh rate available for it. `outputs.monitors`, keyed by connector name, overrides
 that per monitor:
 
@@ -205,7 +204,9 @@ adaptive sync where the monitor supports it. A key such as `["desc:ASUSTek COMPU
 VG27AQ3A"]` matches the start of a monitor's "make model serial" (listed by `shaode msg get
 outputs`), as Hyprland's `desc:` does; a connector-name key wins over it. Monitors with a
 `position` go there, in logical pixels after scaling; the rest follow in a row to their
-right. `shaode msg get outputs` prints what each monitor ended up with. Reloading
+right. The whole layout then shifts so its top-left corner is 0, 0, because X11 apps
+get no input at negative coordinates; windows move with their monitor. `shaode msg get
+outputs` prints what each monitor ended up with. Reloading
 applies changes without restarting.
 
 `shaode import ~/.config` carries an existing Hyprland/Waybar setup over: monitors, colors
