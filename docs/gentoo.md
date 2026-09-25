@@ -120,8 +120,9 @@ return, and shaoDe, the shell, and open windows carry on. On laptops whose F-key
 default to media functions, hold Fn for the VT keys (`sudo chvt N` also works).
 
 For a first run on new hardware, `tools/tty-session-test.sh` runs the build tree's
-`--session` with a log at `~/.local/state/shaode/tty-test-latest.log` and quits
-after `SHAODE_TEST_LIMIT` seconds (default 300) in case input does not work.
+`--session` with a log at `~/.local/state/shaode/tty-test-latest.log`. It has no
+time limit; set `SHAODE_TEST_LIMIT` to a number of seconds to quit on its own in
+case input does not work.
 `SHAODE_TEST_TERM` picks the terminal it opens (default foot).
 
 The backend has run on a laptop (amdgpu, single eDP panel, touchpad) and a
