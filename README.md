@@ -136,9 +136,14 @@ since Hyprland adds it on both sides. The `windows` table draws a border around 
 ID. Fullscreen windows have no border and stay opaque. Rounded corners, blur, and shadows
 need a renderer that wlroots' scene graph does not provide.
 
-Workspaces are shared across outputs; `layout.workspaces` sets how many (1–10).
-The taskbar lists windows from every workspace, and activating one switches to its
-workspace. Window shortcuts act only on the current workspace.
+Every monitor has its own workspaces, numbered 1 to `layout.workspaces` (1–10), and all
+start on 1. Workspace shortcuts switch the focused monitor: the one whose window was
+focused, whose workspace was switched, or that was clicked last. A window belongs to the
+monitor it is on; moved to another monitor, it joins the workspace showing there. The
+panel on each monitor shows that monitor's workspaces, marking the current one and those
+with windows; scrolling over it pages through them and clicking a number switches to it.
+The taskbar lists windows from every workspace, and activating one switches its monitor
+to its workspace. Window shortcuts act only on visible windows.
 
 Portals run as D-Bus services, started with the bus's environment rather than the
 compositor's. A standalone `--session` therefore exports `WAYLAND_DISPLAY`, `DISPLAY`,
@@ -190,14 +195,19 @@ it with `theme = "theme.lua"` and overrides any of it; `--dry-run` only prints. 
 still lacks (rounding, blur, shadows).
 
 A control socket runs any Lua action from scripts or other tools:
-`shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. The query
-`shaode msg get workspace` prints the current workspace, `shaode msg get tiling` prints
+`shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. Prefixing
+`output NAME` makes workspace actions switch that monitor instead of the focused one:
+`shaode msg output HDMI-A-1 workspace_next`. The query
+`shaode msg get workspace` prints the focused monitor's workspace, `shaode msg get workspaces`
+prints one tab-separated line per monitor (name, current workspace, focused, and the
+workspaces holding windows, such as `1,3`, or `-`), `shaode msg get tiling` prints
 `on` or `off`, `shaode msg get outputs` prints one tab-separated line per monitor (name,
 enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
 `shaode msg get windows` prints one tab-separated line per window:
-workspace, focused, minimized, tiled, x, y, width, height, app ID, and title. A client
-that sends `subscribe` keeps its connection and receives `tiling on|off` and
-`workspace N` lines after every change, plus `launcher OUTPUT` when the `launcher` action
+workspace, focused, minimized, tiled, x, y, width, height, app ID, title, monitor, and
+visible. A client that sends `subscribe` keeps its connection and receives `tiling on|off`,
+`workspace N` (the focused monitor's), and one `output NAME N USED` line per monitor (as in
+`get workspaces`) after every change, plus `launcher OUTPUT` when the `launcher` action
 (Super + R) asks the panel on that monitor to open or close its application menu; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
 refused while the session is locked.
 
