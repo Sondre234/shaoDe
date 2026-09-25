@@ -2,6 +2,7 @@
 /* Derived from wlroots TinyWL 0.20.2; see vendor/tinywl/LICENSE. */
 #define _GNU_SOURCE // accept4
 #include "shaode/backend.h"
+#include "shaode/animation.h"
 #include "shaode/decoration.h"
 #include <assert.h>
 #include <errno.h>
@@ -117,6 +118,7 @@ struct sh_server {
     struct wlr_scene_tree *windows;
     struct wlr_scene_tree *fullscreen;
     struct wlr_scene_tree *unmanaged;
+    struct sh_animator *animator;
 #if WLR_HAS_XWAYLAND
     struct wlr_xwayland *xwayland;
     struct wl_listener xwayland_ready, new_xwayland_surface;
@@ -269,7 +271,11 @@ struct sh_toplevel {
     struct wl_listener x_associate, x_dissociate, x_configure, x_activate, x_geometry;
     struct wl_listener x_decorations;
 #endif
-    struct wlr_scene_tree *scene_tree;
+    /* scene_tree sits at the window's place; content holds everything drawn for it, so an
+     * animation can move, scale, and fade it without changing where the window is. */
+    struct wlr_scene_tree *scene_tree, *content;
+    struct sh_anim anim;
+    bool shown; // has opened (and started its opening animation) since it last mapped
     struct wlr_scene_buffer *deco;    // window controls; NULL when the client decorates itself
     struct wlr_scene_rect *border[4]; // top, bottom, left, right; NULL without a border
     float opacity;                    // last applied to the window's buffers
@@ -858,8 +864,11 @@ static void focus_direction(struct sh_server *server, enum sh_action action) {
     if (!best)
         return;
     focus_toplevel(best);
-    // Focus follows the mouse on its next move, so take the pointer along.
+    // Focus follows the mouse on its next move, so take the pointer along. Windows still
+    // opening or gliding are not yet drawn where they are, so they land first; otherwise the
+    // pointer could hover, and focus, whichever window is passing its destination.
     if (server_settings(server)->focus_follows_mouse) {
+        wl_list_for_each(toplevel, &server->toplevels, link) sh_anim_finish(&toplevel->anim);
         struct wlr_box box = toplevel_box(best);
         wlr_cursor_warp(server->cursor, NULL, box.x + box.width / 2.0, box.y + box.height / 2.0);
         struct timespec now;
@@ -1556,7 +1565,7 @@ static void refresh_decoration(struct sh_toplevel *toplevel) {
     if (!buffer)
         return;
     if (!toplevel->deco) {
-        toplevel->deco = wlr_scene_buffer_create(toplevel->scene_tree, buffer);
+        toplevel->deco = wlr_scene_buffer_create(toplevel->content, buffer);
         if (!toplevel->deco)
             return;
         wlr_scene_buffer_set_dest_size(toplevel->deco, SH_DECO_WIDTH, SH_DECO_HEIGHT);
@@ -1613,7 +1622,7 @@ static void refresh_frame(struct sh_toplevel *toplevel) {
         }
         const float *color = active ? settings->border_active : settings->border_inactive;
         if (!toplevel->border[i])
-            toplevel->border[i] = wlr_scene_rect_create(toplevel->scene_tree, 1, 1, color);
+            toplevel->border[i] = wlr_scene_rect_create(toplevel->content, 1, 1, color);
         if (!toplevel->border[i])
             return;
         wlr_scene_rect_set_color(toplevel->border[i], color);
@@ -1878,6 +1887,7 @@ static void output_frame(struct wl_listener *listener, void *data) {
 
     struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(scene, output->wlr_output);
 
+    sh_animator_tick(output->server->animator);
     wlr_scene_output_commit(scene_output, NULL);
     lock_output_presented(output);
 
@@ -2273,9 +2283,15 @@ static void configure_output(struct sh_server *server, struct sh_output *output)
     }
 }
 
+static void configure_animations(struct sh_server *server) {
+    const struct sh_settings *settings = server_settings(server);
+    sh_animator_configure(server->animator, settings->animations, settings->animation_duration);
+}
+
 static void reload_config(struct sh_server *server) {
     if (!server->callbacks->reload(server->callbacks->userdata))
         return;
+    configure_animations(server);
     struct sh_keyboard *keyboard;
     wl_list_for_each(keyboard, &server->keyboards, link) {
         if (!configure_keyboard(server, keyboard->wlr_keyboard))
@@ -2534,7 +2550,14 @@ static void place_tiled(void *data, void *window, struct sh_rect rect) {
         return; // It returns to its tile when it leaves fullscreen.
     toplevel_set_states(toplevel, false, ALL_EDGES);
     rect = inside_border(toplevel->server, rect);
+    struct wlr_scene_node *node = &toplevel->scene_tree->node;
+    int x = node->x, y = node->y;
     toplevel_configure(toplevel, rect.x, rect.y, rect.width, rect.height);
+    // Tiles already on screen glide to their new place; the size follows when the client
+    // draws it.
+    if (toplevel->shown && toplevel_visible(toplevel))
+        sh_anim_glide(toplevel->server->animator, &toplevel->anim, toplevel->content, x - node->x,
+                      y - node->y);
 }
 
 /* Snapped, maximized, or grid-arranged windows that follow changes to the usable area. */
@@ -3036,6 +3059,11 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
         set_fullscreen(toplevel, true);
     else if (maximized)
         maximize_toplevel(toplevel, true);
+    // The first frame is already committed and shows at once, only faded and a little small.
+    toplevel->shown = true;
+    struct wlr_box box = toplevel_geometry(toplevel);
+    sh_anim_open(server->animator, &toplevel->anim, toplevel->content, box.width / 2.0,
+                 box.height / 2.0);
     notify_subscribers(server); // its workspace holds a window now
 }
 
@@ -3046,6 +3074,15 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 }
 
 static void unmap_toplevel(struct sh_toplevel *toplevel) {
+    // The client's buffers go with this commit; the closing animation draws a copy of them.
+    struct sh_server *server = toplevel->server;
+    if (toplevel->shown && server->running && toplevel_visible(toplevel)) {
+        struct wlr_box box = toplevel_geometry(toplevel);
+        sh_anim_close(server->animator, &toplevel->scene_tree->node, toplevel->content,
+                      box.width / 2.0, box.height / 2.0);
+    }
+    sh_anim_finish(&toplevel->anim);
+    toplevel->shown = false;
     if (toplevel == toplevel->server->grabbed_toplevel) {
         reset_cursor_mode(toplevel->server);
     }
@@ -3088,6 +3125,7 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 
 /* Frees a window after removing the listeners xdg-shell and X11 windows have in common. */
 static void free_toplevel(struct sh_toplevel *toplevel) {
+    sh_anim_finish(&toplevel->anim);
     wl_list_remove(&toplevel->destroy.link);
     wl_list_remove(&toplevel->request_move.link);
     wl_list_remove(&toplevel->request_resize.link);
@@ -3109,6 +3147,8 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->map.link);
     wl_list_remove(&toplevel->unmap.link);
     wl_list_remove(&toplevel->commit.link);
+    sh_anim_finish(&toplevel->anim);
+    wlr_scene_node_destroy(&toplevel->scene_tree->node);
     free_toplevel(toplevel);
 }
 
@@ -3279,16 +3319,20 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = calloc(1, sizeof(*toplevel));
     toplevel->server = server;
     toplevel->xdg_toplevel = xdg_toplevel;
-    toplevel->scene_tree =
-        wlr_scene_xdg_surface_create(toplevel->server->windows, xdg_toplevel->base);
-    toplevel->node = (struct sh_node){SH_NODE_TOPLEVEL, toplevel};
-    toplevel->scene_tree->node.data = &toplevel->node;
-    xdg_toplevel->base->data = toplevel->scene_tree;
 
+    // Listen before the scene does, so the surfaces are still shown when the window unmaps
+    // and the closing animation can copy them.
     struct wlr_surface *surface = xdg_toplevel->base->surface;
     add_listener(&surface->events.map, &toplevel->map, xdg_toplevel_map);
     add_listener(&surface->events.unmap, &toplevel->unmap, xdg_toplevel_unmap);
     add_listener(&surface->events.commit, &toplevel->commit, xdg_toplevel_commit);
+    toplevel->scene_tree = wlr_scene_tree_create(toplevel->server->windows);
+    toplevel->content = wlr_scene_tree_create(toplevel->scene_tree);
+    wlr_scene_xdg_surface_create(toplevel->content, xdg_toplevel->base);
+    toplevel->node = (struct sh_node){SH_NODE_TOPLEVEL, toplevel};
+    toplevel->scene_tree->node.data = &toplevel->node;
+    toplevel->content->node.data = &toplevel->node;
+    xdg_toplevel->base->data = toplevel->scene_tree;
     add_listener(&xdg_toplevel->events.destroy, &toplevel->destroy, xdg_toplevel_destroy);
     add_listener(&xdg_toplevel->events.set_title, &toplevel->title_changed, toplevel_title_changed);
     add_listener(&xdg_toplevel->events.set_app_id, &toplevel->app_id_changed,
@@ -3350,12 +3394,13 @@ static void xwayland_map(struct wl_listener *listener, void *data) {
     toplevel->unmanaged = xsurface->override_redirect;
     toplevel->scene_tree =
         wlr_scene_tree_create(toplevel->unmanaged ? server->unmanaged : server->windows);
-    if (!toplevel->scene_tree ||
-        !wlr_scene_subsurface_tree_create(toplevel->scene_tree, xsurface->surface)) {
+    toplevel->content = toplevel->scene_tree ? wlr_scene_tree_create(toplevel->scene_tree) : NULL;
+    if (!toplevel->content ||
+        !wlr_scene_subsurface_tree_create(toplevel->content, xsurface->surface)) {
         wlr_log(WLR_ERROR, "Cannot create scene for X11 window");
         if (toplevel->scene_tree)
             wlr_scene_node_destroy(&toplevel->scene_tree->node);
-        toplevel->scene_tree = NULL;
+        toplevel->scene_tree = toplevel->content = NULL;
         return;
     }
     if (toplevel->unmanaged) {
@@ -3368,6 +3413,7 @@ static void xwayland_map(struct wl_listener *listener, void *data) {
         return;
     }
     toplevel->scene_tree->node.data = &toplevel->node;
+    toplevel->content->node.data = &toplevel->node;
     map_toplevel(toplevel, xsurface->fullscreen,
                  xsurface->maximized_horz && xsurface->maximized_vert);
     refresh_decoration(toplevel);
@@ -3389,8 +3435,9 @@ static void xwayland_unmap(struct wl_listener *listener, void *data) {
     } else {
         unmap_toplevel(toplevel);
     }
+    sh_anim_finish(&toplevel->anim);
     wlr_scene_node_destroy(&toplevel->scene_tree->node);
-    toplevel->scene_tree = NULL;
+    toplevel->scene_tree = toplevel->content = NULL;
 }
 
 static void xwayland_associate(struct wl_listener *listener, void *data) {
@@ -3841,6 +3888,15 @@ static void control_handle(struct sh_server *server, int fd, const char *request
         control_describe_windows(server, fd);
         return;
     }
+    if (!strcmp(request, "get animations")) {
+        // Running animations, and the scene trees stacked for windows (with closing copies).
+        char reply[64];
+        snprintf(reply, sizeof(reply), "ok\n%zu\t%d\n", sh_animator_running(server->animator),
+                 wl_list_length(&server->windows->children) +
+                     wl_list_length(&server->fullscreen->children));
+        control_reply(fd, reply);
+        return;
+    }
     if (server->locked) {
         control_reply(fd, "error: the session is locked\n");
         return;
@@ -4110,6 +4166,10 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     struct wl_event_source *sighup = wl_event_loop_add_signal(loop, SIGHUP, reload_signal, &server);
     struct wl_event_source *sigchld =
         wl_event_loop_add_signal(loop, SIGCHLD, reap_children, &server);
+    server.animator = sh_animator_create(loop);
+    if (!server.animator)
+        return 1;
+    configure_animations(&server);
 
     server.backend = wlr_backend_autocreate(loop,
 #if WLR_HAS_SESSION
@@ -4352,6 +4412,7 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_list_remove(&server.new_inhibitor.link);
 
     wlr_backend_destroy(server.backend);
+    sh_animator_destroy(server.animator);
     wlr_scene_node_destroy(&server.scene->tree.node);
     for (int i = 0; i < 2; ++i)
         wlr_buffer_drop(server.deco_buffers[i]);

@@ -34,6 +34,8 @@ return {
         -- Per application, by app ID (a regular expression); the first match wins:
         -- rules = { { app_id = "^firefox$", opacity = 0.9, inactive_opacity = 0.85 } },
     },
+    -- Windows fade in and out and tiles glide into place, over `duration` milliseconds:
+    -- animations = { enabled = true, duration = 120 },
     outputs = {
         -- Left to right by connector name; unlisted monitors follow on the right.
         order = { "HDMI-A-1", "DP-3", "DP-1" },

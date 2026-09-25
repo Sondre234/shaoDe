@@ -178,6 +178,20 @@ int main(int argc, char **argv) {
                     defaults.mouse_natural_scroll == -1 && defaults.touchpad_tap == -1 &&
                     defaults.focus_follows_mouse,
                 "pointer defaults must leave devices alone");
+        require(defaults.animations && defaults.animation_duration == 120,
+                "animations should be on for 120 ms by default");
+        require(config.settings.animations, "example turns animations off");
+        auto still = shaode::parse_config("return {animations={enabled=false,duration=200}}");
+        require(!still.settings.animations && still.settings.animation_duration == 200,
+                "animations not parsed");
+        require(shaode::parse_config("return {animations={duration=80}}").settings.animations,
+                "a duration alone should keep animations on");
+        rejects("return {animations={enabled='no'}}");
+        rejects("return {animations={duration=0}}");
+        rejects("return {animations={duration=1.5}}");
+        rejects("return {animations={duration=5000}}");
+        rejects("return {animations={curve='linear'}}");
+        rejects("return {animations=true}");
         rejects("return {mouse={speed=2}}");
         rejects("return {mouse={acceleration='fast'}}");
         rejects("return {touchpad={tap_to_click=1}}");

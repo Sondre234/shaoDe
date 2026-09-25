@@ -40,6 +40,7 @@ void hyprlang(const fs::path &root) {
     require(near(s.border_inactive[3], 0xaa / 255.0F), "0xAARRGGBB border color not read");
     require(config.shell.accent == "#ff8800", "accent does not follow the active border");
     require(near(config.opacity, 0.95F), "active_opacity not imported");
+    require(!s.animations, "animations:enabled not imported");
     require(std::string(s.keyboard_layout) == "us" &&
                 std::string(s.keyboard_options) == "caps:escape" && s.repeat_rate == 30,
             "keyboard settings not imported");
@@ -107,6 +108,7 @@ void lua(const fs::path &root) {
     require(config.shell.accent == "#e8a3c9", "gradient table's first color not used");
     require(near(s.border_inactive[3], 0xee / 255.0F), "integer ARGB color not read");
     require(near(config.inactive_opacity, 0.9F), "inactive_opacity not imported");
+    require(!s.animations, "animations.enabled not imported from hl.config");
     require(s.touchpad_tap == 0, "[\"tap-to-click\"] not imported");
     require(config.window_rules.size() == 1 && near(config.window_opacity("kitty", false), 0.8F),
             "hl.window_rule not imported, or the disabled rule was");

@@ -360,7 +360,7 @@ Config read(lua_State *L) {
     table(L, -1, "configuration result");
     keys(L, -1,
          {"version", "theme", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs",
-          "windows", "bindings", "startup", "shell", "xwayland", "screenshots"});
+          "windows", "animations", "bindings", "startup", "shell", "xwayland", "screenshots"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
@@ -450,6 +450,11 @@ Config read(lua_State *L) {
     }
     lua_pop(L, 1);
     read_windows(L, config);
+    if (section(L, "animations", {"enabled", "duration"})) {
+        boolean(L, "enabled", "animations.enabled", config.settings.animations);
+        config.settings.animation_duration = integer(L, "duration", 120, 10, 1000);
+    }
+    lua_pop(L, 1);
     if (section(L, "screenshots", {"directory", "clipboard", "notify"})) {
         lua_getfield(L, -1, "directory");
         if (!lua_isnil(L, -1)) {

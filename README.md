@@ -144,6 +144,14 @@ since Hyprland adds it on both sides. The `windows` table draws a border around 
 ID. Fullscreen windows have no border and stay opaque. Rounded corners, blur, and shadows
 need a renderer that wlroots' scene graph does not provide.
 
+Windows fade in while growing slightly when they open, and fade out while shrinking slightly
+when they close (drawn from a copy of their last frame). Tiles glide to their new place when
+the layout changes; their new size shows as soon as the application draws it. The scene graph
+has no transform for a whole window, so the scaling resizes each of its surfaces about the
+window's center. `animations = { enabled = false }` turns this off, and `duration` sets the
+length in milliseconds (default 120, 10–1000). Window positions reported by `shaode msg` are
+always the final ones.
+
 Every monitor has its own workspaces, numbered 1 to `layout.workspaces` (1–10), and all
 start on 1. Workspace shortcuts switch the focused monitor: the one whose window was
 focused, whose workspace was switched, or that was clicked last. A window belongs to the
@@ -195,7 +203,8 @@ right. `shaode msg get outputs` prints what each monitor ended up with. Reloadin
 applies changes without restarting.
 
 `shaode import ~/.config` carries an existing Hyprland/Waybar setup over: monitors, colors
-(wallbash or pywal), bar look, gaps, borders, opacity, input, and wallpaper. It runs
+(wallbash or pywal), bar look, gaps, borders, opacity, input, animations on/off, and
+wallpaper. It runs
 `hyprland.lua` in a sandbox (or parses `hyprland.conf`), writes `theme.lua` beside the
 configuration, and reports where each value came from and what it skipped. `init.lua` loads
 it with `theme = "theme.lua"` and overrides any of it; `--dry-run` only prints. See
@@ -214,7 +223,9 @@ workspaces holding windows, such as `1,3`, or `-`), `shaode msg get tiling` prin
 enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
 `shaode msg get windows` prints one tab-separated line per window:
 workspace, focused, minimized, tiled, x, y, width, height, app ID, title, monitor, and
-visible. A client that sends `subscribe` keeps its connection and receives `tiling on|off`,
+visible. `shaode msg get animations` prints the number of running animations and of window trees in
+the scene (closing windows count until their animation ends), mainly for tests. A client
+that sends `subscribe` keeps its connection and receives `tiling on|off`,
 `workspace N` (the focused monitor's), and one `output NAME N USED` line per monitor (as in
 `get workspaces`) after every change, plus `launcher OUTPUT` when the `launcher` action
 (Super + R) asks the panel on that monitor to open or close its application menu; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are

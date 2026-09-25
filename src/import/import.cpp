@@ -237,6 +237,7 @@ class Translator {
                     used_.insert(name);
         }
         used_.insert("decoration:rounding_power");
+        flag("animations:enabled", {"animations", "enabled"});
 
         text("input:kb_layout", {"keyboard", "layout"});
         text("input:kb_options", {"keyboard", "options"});

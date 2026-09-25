@@ -193,3 +193,15 @@ errors when grim or slurp is missing. With the real grim in a headless session, 
 window modes produced a 1280×720 PNG and a 320×240 crop of the probe window. Not yet exercised:
 the Print keys and slurp's interactive selection in a nested or physical session, the clipboard
 copy, and the notification.
+
+## Window animation checkpoint
+
+Added 2026-09-25. `animation_smoke` runs a headless compositor with tiling and a
+1-second duration, and checks through `shaode msg get animations` that opening,
+the neighbour's glide, and the closing copy each run and then end, that closing copies
+leave no scene trees behind, that a reload turning animations off ends those running,
+and that quitting mid-animation exits cleanly. Under AddressSanitizer and
+LeakSanitizer the compositor exited without findings. `grim` screenshots of a headless
+session with foot showed the fade and scale on opening, the glide, and the closing
+copy fading out. Not yet seen on a real display: smoothness at 120 ms on high refresh
+rates, and GPU clients (dmabuf) closing.

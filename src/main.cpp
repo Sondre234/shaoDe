@@ -313,7 +313,7 @@ int send_message(int argc, char **argv) {
         request += (i > 2 ? " " : "") + std::string(argv[i]);
     if (request.empty() || request.find('\n') != std::string::npos)
         throw std::runtime_error("usage: shaode msg [output NAME] ACTION [ARGUMENT] | "
-                                 "get workspace|workspaces|tiling|windows|outputs");
+                                 "get workspace|workspaces|tiling|windows|outputs|animations");
     const char *path = std::getenv("SHAODE_SOCKET");
     if (!path || !*path)
         throw std::runtime_error("SHAODE_SOCKET is not set; run inside a shaoDe session");
@@ -421,7 +421,7 @@ void usage() {
            "--no-shell disables automatic shell startup; headless mode never starts it.\n"
            "SIGHUP reloads configuration; SIGINT/SIGTERM exits.\n"
            "shaode msg [output NAME] ACTION [ARGUMENT] runs an action in the running session;\n"
-           "shaode msg get workspace|workspaces|tiling|windows|outputs prints its state.\n"
+           "shaode msg get workspace|workspaces|tiling|windows|outputs|animations prints its state.\n"
            "shaode import [--config PATH] [--dry-run] DIR writes theme.lua beside the\n"
            "configuration from the Hyprland, Waybar, wallbash, and pywal files in DIR.\n";
 }
