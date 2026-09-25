@@ -87,8 +87,8 @@ bar. Instead, three small macOS-style dots sit over their top-right corner (mini
 fullscreen, and close, from left to right) and appear when the pointer nears that corner, so they never cover text.
 Dragging the pill around the dots moves the window. Other windows decorate themselves.
 
-Dropping a dragged window over the top edge of the screen, or over a panel along it, makes
-it fullscreen; dragging a fullscreen window away restores its earlier size. Hovering a
+Dropping a dragged window with the pointer at the top edge of the screen, or on a panel along
+it, makes it fullscreen; dragging a fullscreen window away restores its earlier size. Hovering a
 window focuses it without raising it (`mouse.focus_follows = false` turns this off), except
 while dragging, while a menu or popup is open, or while a panel or launcher has the keyboard.
 

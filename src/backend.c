@@ -1179,15 +1179,12 @@ static void reset_cursor_mode(struct sh_server *server) {
     server->grab_fullscreen = false;
 }
 
-/* A window dropped over the top edge of its output, or over a panel along it. */
-static bool dropped_at_top(struct sh_toplevel *toplevel) {
-    struct sh_server *server = toplevel->server;
+/* The pointer reached the top edge of its output, or a panel along it. The pointer decides, not
+ * the window: clients such as Firefox draw their tab strip above their reported geometry. */
+static bool dropped_at_top(struct sh_server *server) {
     struct wlr_output *output =
         wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
-    if (!output)
-        return false;
-    int top = toplevel->scene_tree->node.y + toplevel_geometry(toplevel).y;
-    return top < usable_area(server, output).y;
+    return output && server->cursor->y < usable_area(server, output).y + 1;
 }
 
 /* Dropping a window dragged out of the tiling splits the tile under the pointer; dropping one
@@ -1195,7 +1192,7 @@ static bool dropped_at_top(struct sh_toplevel *toplevel) {
 static void finish_grab(struct sh_server *server) {
     struct sh_toplevel *toplevel = server->grabbed_toplevel;
     bool fullscreen = toplevel && server->cursor_mode == SH_CURSOR_MOVE &&
-                      !server->grab_fullscreen && dropped_at_top(toplevel);
+                      !server->grab_fullscreen && dropped_at_top(server);
     if (server->grab_retile && toplevel && wants_tiling(toplevel))
         tile_toplevel(toplevel,
                       wlr_output_layout_output_at(server->output_layout, server->cursor->x,
