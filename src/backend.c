@@ -365,6 +365,7 @@ static void set_tiling(struct sh_server *server, bool enabled);
 static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
                           struct sh_toplevel *target, bool at_cursor);
 static struct wlr_output *tiled_output(struct sh_toplevel *toplevel);
+static struct wlr_output *toplevel_output(struct sh_toplevel *toplevel);
 static void untile_toplevel(struct sh_toplevel *toplevel, bool restore);
 static bool wants_tiling(struct sh_toplevel *toplevel);
 
@@ -1881,6 +1882,33 @@ static void server_cursor_frame(struct wl_listener *listener, void *data) {
     wlr_seat_pointer_notify_frame(server->seat);
 }
 
+/* Bars (top-layer surfaces that reserve space) stay hidden while the output shows a
+ * fullscreen window, focused or not. One taking the keyboard, like the panel with its
+ * launcher or a menu open, is still shown. */
+static void hide_bars_over_fullscreen(struct sh_output *output) {
+    struct sh_server *server = output->server;
+    bool fullscreen = false;
+    struct sh_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel->fullscreen && toplevel_mapped(toplevel) && toplevel_visible(toplevel) &&
+            toplevel_output(toplevel) == output->wlr_output) {
+            fullscreen = true;
+            break;
+        }
+    }
+    struct sh_layer *layer;
+    wl_list_for_each(layer, &server->layers, link) {
+        struct wlr_layer_surface_v1 *surface = layer->surface;
+        if (surface->output != output->wlr_output ||
+            surface->current.layer != ZWLR_LAYER_SHELL_V1_LAYER_TOP ||
+            surface->current.exclusive_zone <= 0)
+            continue;
+        bool keyboard = surface->current.keyboard_interactive !=
+                        ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
+        wlr_scene_node_set_enabled(&layer->scene->tree->node, !fullscreen || keyboard);
+    }
+}
+
 static void output_frame(struct wl_listener *listener, void *data) {
     struct sh_output *output = wl_container_of(listener, output, frame);
     struct wlr_scene *scene = output->server->scene;
@@ -1888,6 +1916,7 @@ static void output_frame(struct wl_listener *listener, void *data) {
     struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(scene, output->wlr_output);
 
     sh_animator_tick(output->server->animator);
+    hide_bars_over_fullscreen(output);
     wlr_scene_output_commit(scene_output, NULL);
     lock_output_presented(output);
 
@@ -3841,6 +3870,24 @@ static int focused_workspace(struct sh_server *server) {
     return output ? *output_workspace(server, output->name) + 1 : 1;
 }
 
+static void control_describe_layers(struct sh_server *server, int fd) {
+    control_reply(fd, "ok\n");
+    struct sh_layer *layer;
+    // namespace, output, layer (0 background to 3 overlay), shown — one per line.
+    wl_list_for_each_reverse(layer, &server->layers, link) {
+        struct wlr_layer_surface_v1 *surface = layer->surface;
+        char namespace[256], line[512];
+        snprintf(namespace, sizeof(namespace), "%s", surface->namespace);
+        for (char *c = namespace; *c; ++c)
+            if (*c == '\n' || *c == '\r' || *c == '\t')
+                *c = ' ';
+        snprintf(line, sizeof(line), "%s\t%s\t%d\t%d\n", namespace,
+                 surface->output ? surface->output->name : "", surface->current.layer,
+                 surface->surface->mapped && layer->scene->tree->node.enabled);
+        control_reply(fd, line);
+    }
+}
+
 static void control_describe_output(struct sh_server *server, int fd, struct sh_output *output) {
     struct wlr_output *o = output->wlr_output;
     struct wlr_box box = {0};
@@ -3901,6 +3948,10 @@ static void control_handle(struct sh_server *server, int fd, const char *request
                  wl_list_length(&server->windows->children) +
                      wl_list_length(&server->fullscreen->children));
         control_reply(fd, reply);
+        return;
+    }
+    if (!strcmp(request, "get layers")) {
+        control_describe_layers(server, fd);
         return;
     }
     if (server->locked) {

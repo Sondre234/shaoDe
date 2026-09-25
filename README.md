@@ -98,8 +98,11 @@ it, makes it fullscreen; dragging a fullscreen window away restores its earlier 
 window focuses it without raising it (`mouse.focus_follows = false` turns this off), except
 while dragging, while a menu or popup is open, or while a panel or launcher has the keyboard.
 
-Limitations: snapping is keyboard-driven, without edge-drag previews. Fullscreen covers the panel while the window is focused;
-focusing another window lowers it behind the panel until it is refocused. Window
+The panel and other bars stay hidden on a monitor showing a fullscreen window, even after
+another window takes focus, until the window leaves fullscreen or its workspace is switched
+away; the panel still shows while its launcher or a menu is open.
+
+Limitations: snapping is keyboard-driven, without edge-drag previews. Window
 placement during interactive resize is immediate, without waiting for the
 client's next buffer.
 
@@ -225,7 +228,9 @@ workspaces holding windows, such as `1,3`, or `-`), `shaode msg get tiling` prin
 enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
 `shaode msg get windows` prints one tab-separated line per window:
 workspace, focused, minimized, tiled, x, y, width, height, app ID, title, monitor, and
-visible. `shaode msg get animations` prints the number of running animations and of window trees in
+visible. `shaode msg get layers` prints one line per panel or other layer-shell surface:
+namespace, output, layer (0 background to 3 overlay), and whether it is shown.
+`shaode msg get animations` prints the number of running animations and of window trees in
 the scene (closing windows count until their animation ends), mainly for tests. A client
 that sends `subscribe` keeps its connection and receives `tiling on|off`,
 `workspace N` (the focused monitor's), and one `output NAME N USED` line per monitor (as in
