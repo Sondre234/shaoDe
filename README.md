@@ -48,8 +48,10 @@ automatically with the example configuration.
 The shell has pinned desktop shortcuts (double-click to launch), a taskbar with
 window activation/minimization and a right-click window menu, an application
 search menu, a tiling on/off button, a clock, and a show-desktop button. Installed applications are read
-from desktop entries through GIO. Lua configures panel height, colors, wallpaper,
-and pinned commands. Pinned commands run from your home directory. In a nested
+from desktop entries through GIO. Lua configures the panel's height, top or
+bottom placement (`panel_position`), margins that make it float (`panel_margin`, one
+number or `{ top, right, bottom, left }`), corner radius, font and text size, colors
+(`#RRGGBB`, or `#RRGGBBAA` for a translucent panel), wallpaper, and pinned commands. Pinned commands run from your home directory. In a nested
 session, applications that reuse an existing process or D-Bus service can open
 in the host session instead.
 

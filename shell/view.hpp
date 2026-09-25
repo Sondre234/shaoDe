@@ -18,5 +18,6 @@ class ShellView : public QQuickView {
     bool desktop_, preview_, expanded_ = false;
     LayerShellQt::Window *layer_ = nullptr;
     QScreen *outputScreen_;
+    void placeLayer();
     void resizeForContent();
 };

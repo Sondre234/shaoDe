@@ -18,6 +18,15 @@ class ShellController : public QObject {
     Q_PROPERTY(QColor background READ background NOTIFY configChanged)
     Q_PROPERTY(QUrl wallpaper READ wallpaper NOTIFY configChanged)
     Q_PROPERTY(int panelHeight READ panelHeight NOTIFY configChanged)
+    Q_PROPERTY(bool panelTop READ panelTop NOTIFY configChanged)
+    Q_PROPERTY(int panelMarginTop READ panelMarginTop NOTIFY configChanged)
+    Q_PROPERTY(int panelMarginRight READ panelMarginRight NOTIFY configChanged)
+    Q_PROPERTY(int panelMarginBottom READ panelMarginBottom NOTIFY configChanged)
+    Q_PROPERTY(int panelMarginLeft READ panelMarginLeft NOTIFY configChanged)
+    Q_PROPERTY(int panelExtent READ panelExtent NOTIFY configChanged)
+    Q_PROPERTY(int panelRadius READ panelRadius NOTIFY configChanged)
+    Q_PROPERTY(QString fontFamily READ fontFamily NOTIFY configChanged)
+    Q_PROPERTY(int fontSize READ fontSize NOTIFY configChanged)
     Q_PROPERTY(QVariantList pinned READ pinned NOTIFY appsChanged)
     Q_PROPERTY(QVariantList apps READ apps NOTIFY appsChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
@@ -33,6 +42,16 @@ class ShellController : public QObject {
     QColor background() const;
     QUrl wallpaper() const;
     int panelHeight() const { return config_.shell.panel_height; }
+    bool panelTop() const { return config_.shell.panel_top; }
+    int panelMarginTop() const { return config_.shell.panel_margin[0]; }
+    int panelMarginRight() const { return config_.shell.panel_margin[1]; }
+    int panelMarginBottom() const { return config_.shell.panel_margin[2]; }
+    int panelMarginLeft() const { return config_.shell.panel_margin[3]; }
+    // The strip the panel reserves: the bar and the margins above and below it.
+    int panelExtent() const { return panelHeight() + panelMarginTop() + panelMarginBottom(); }
+    int panelRadius() const { return config_.shell.panel_radius; }
+    QString fontFamily() const { return QString::fromStdString(config_.shell.font); }
+    int fontSize() const { return config_.shell.font_size; }
     bool enabled() const { return config_.shell.enabled; }
     QVariantList pinned() const;
     QVariantList apps() const;

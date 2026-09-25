@@ -14,6 +14,12 @@ Item {
         if (launcherOpen) { taskMenuId = -1; search.text = ""; search.forceActiveFocus() }
     }
     function closeMenus() { launcherOpen = false; taskMenuId = -1 }
+    // Popups open away from the screen edge the bar sits on.
+    readonly property bool onTop: shell.panelTop
+    readonly property string uiFont: shell.fontFamily.length > 0 ? shell.fontFamily : Qt.application.font.family
+    readonly property bool floating: shell.panelRadius > 0 || shell.panelMarginLeft > 0 ||
+                                     shell.panelMarginRight > 0 || shell.panelMarginTop > 0 ||
+                                     shell.panelMarginBottom > 0
     Keys.onEscapePressed: closeMenus()
 
     MouseArea {
@@ -26,11 +32,13 @@ Item {
         id: launcher
         visible: root.launcherOpen
         width: Math.min(460, root.width - 24)
-        height: root.height - bar.height - 20
+        height: root.height - shell.panelExtent - 20
         anchors.left: parent.left
-        anchors.leftMargin: 12
-        anchors.bottom: bar.top
+        anchors.leftMargin: 12 + shell.panelMarginLeft
+        anchors.bottom: root.onTop ? undefined : bar.top
+        anchors.top: root.onTop ? bar.bottom : undefined
         anchors.bottomMargin: 10
+        anchors.topMargin: 10
         color: shell.panelColor
         border.color: Qt.lighter(shell.panelColor, 1.65)
         radius: 14
@@ -41,7 +49,7 @@ Item {
             spacing: 14
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: "Applications"; color: shell.textColor; font.pixelSize: 21; font.weight: Font.DemiBold }
+                Text { text: "Applications"; color: shell.textColor; font.pixelSize: 21; font.weight: Font.DemiBold; font.family: root.uiFont }
                 Item { Layout.fillWidth: true }
                 Button {
                     text: "Refresh"
@@ -60,7 +68,7 @@ Item {
                 color: shell.textColor
                 selectByMouse: true
                 leftPadding: 12
-                font.pixelSize: 14
+                font.pixelSize: 14; font.family: root.uiFont
                 background: Rectangle {
                     radius: 7
                     color: Qt.darker(shell.panelColor, 1.2)
@@ -90,17 +98,17 @@ Item {
                     contentItem: RowLayout {
                         spacing: 12
                         Image { source: "image://icons/" + modelData.icon; sourceSize: Qt.size(30, 30); Layout.preferredWidth: 30; Layout.preferredHeight: 30 }
-                        Text { text: modelData.name; color: shell.textColor; font.pixelSize: 14; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Text { visible: modelData.pinned; text: "Pinned"; color: shell.accent; font.pixelSize: 10 }
+                        Text { text: modelData.name; color: shell.textColor; font.pixelSize: 14; elide: Text.ElideRight; Layout.fillWidth: true; font.family: root.uiFont }
+                        Text { visible: modelData.pinned; text: "Pinned"; color: shell.accent; font.pixelSize: 10; font.family: root.uiFont }
                     }
                 }
-                Text { anchors.centerIn: parent; visible: applications.count === 0; text: "No matching applications"; color: shell.textColor }
+                Text { anchors.centerIn: parent; visible: applications.count === 0; text: "No matching applications"; color: shell.textColor; font.family: root.uiFont }
             }
             Text {
                 Layout.fillWidth: true
                 text: "shaoDe"
                 color: Qt.darker(shell.textColor, 1.7)
-                font.pixelSize: 11
+                font.pixelSize: 11; font.family: root.uiFont
             }
         }
     }
@@ -109,7 +117,8 @@ Item {
         visible: root.taskMenuId >= 0
         width: 220; height: 150
         x: Math.max(8, Math.min(root.taskMenuX, root.width - width - 8))
-        anchors.bottom: bar.top; anchors.bottomMargin: 8
+        anchors.bottom: root.onTop ? undefined : bar.top; anchors.bottomMargin: 8
+        anchors.top: root.onTop ? bar.bottom : undefined; anchors.topMargin: 8
         color: shell.panelColor; radius: 10
         border.color: Qt.lighter(shell.panelColor, 1.6)
         Column {
@@ -137,10 +146,22 @@ Item {
 
     Rectangle {
         id: bar
-        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        anchors.left: parent.left; anchors.right: parent.right
+        anchors.leftMargin: shell.panelMarginLeft; anchors.rightMargin: shell.panelMarginRight
+        anchors.bottom: root.onTop ? undefined : parent.bottom
+        anchors.top: root.onTop ? parent.top : undefined
+        anchors.bottomMargin: shell.panelMarginBottom; anchors.topMargin: shell.panelMarginTop
         height: shell.panelHeight
         color: shell.panelColor
-        Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Qt.lighter(shell.panelColor, 1.65) }
+        radius: shell.panelRadius
+        // A floating bar gets an outline; a docked one a line along its inner edge.
+        border.width: root.floating ? 1 : 0
+        border.color: Qt.lighter(shell.panelColor, 1.65)
+        Rectangle {
+            visible: !root.floating
+            y: root.onTop ? parent.height - 1 : 0
+            width: parent.width; height: 1; color: Qt.lighter(shell.panelColor, 1.65)
+        }
         RowLayout {
             anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8
             spacing: 6
@@ -193,7 +214,7 @@ Item {
                     contentItem: RowLayout {
                         spacing: 6
                         Image { source: "image://icons/" + taskButton.appId; sourceSize: Qt.size(22, 22); Layout.preferredWidth: 22; Layout.preferredHeight: 22 }
-                        Text { text: taskButton.title; color: shell.textColor; elide: Text.ElideRight; Layout.fillWidth: true; font.pixelSize: 12 }
+                        Text { text: taskButton.title; color: shell.textColor; elide: Text.ElideRight; Layout.fillWidth: true; font.pixelSize: shell.fontSize; font.family: root.uiFont }
                     }
                     TapHandler { acceptedButtons: Qt.RightButton; onTapped: {
                         root.launcherOpen = false
@@ -235,7 +256,8 @@ Item {
                 id: clock
                 property date now: new Date()
                 text: Qt.formatTime(now, "HH:mm") + "\n" + Qt.formatDate(now, "ddd d MMM")
-                color: shell.textColor; horizontalAlignment: Text.AlignRight; font.pixelSize: 11
+                color: shell.textColor; horizontalAlignment: Text.AlignRight
+                font.pixelSize: Math.max(6, shell.fontSize - 1); font.family: root.uiFont
                 Layout.preferredWidth: 82
                 Timer { interval: 1000; running: true; repeat: true; onTriggered: clock.now = new Date() }
             }

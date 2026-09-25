@@ -105,6 +105,27 @@ int main(int argc, char **argv) {
         rejects("return {version=2}");
         rejects("return {shell={enabled='yes'}}");
         rejects("return {shell={panel_height=0}}");
+        auto bar = shaode::parse_config(
+            "return {shell={panel_position='top',panel_margin={top=6,left=10,right=10},"
+            "panel_radius=12,font='JetBrainsMono Nerd Font',font_size=13,"
+            "panel_color='#151e2ccc'}}");
+        require(bar.shell.panel_top && bar.shell.panel_margin[0] == 6 &&
+                    bar.shell.panel_margin[1] == 10 && bar.shell.panel_margin[2] == 0 &&
+                    bar.shell.panel_margin[3] == 10 && bar.shell.panel_radius == 12 &&
+                    bar.shell.font == "JetBrainsMono Nerd Font" && bar.shell.font_size == 13 &&
+                    bar.shell.panel_color == "#151e2ccc",
+                "bar settings not parsed");
+        auto even = shaode::parse_config("return {shell={panel_margin=8}}");
+        require(even.shell.panel_margin[0] == 8 && even.shell.panel_margin[3] == 8 &&
+                    !even.shell.panel_top,
+                "single panel margin not parsed");
+        rejects("return {shell={panel_position='left'}}");
+        rejects("return {shell={panel_margin=-1}}");
+        rejects("return {shell={panel_margin={middle=1}}}");
+        rejects("return {shell={panel_radius=51}}");
+        rejects("return {shell={font_size=2}}");
+        rejects("return {shell={accent='#12345'}}");
+        rejects("return {appearance={background='#11223344'}}");
         rejects("return {shell={accent='red'}}");
         rejects("return {shell={launchers={{name='',command={'kitty'}}}}}");
         rejects("return {shell={launchers={{name='Terminal',command='kitty'}}}}");

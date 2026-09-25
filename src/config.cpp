@@ -84,8 +84,8 @@ void boolean(lua_State *L, const char *key, const char *label, bool &target) {
     }
     lua_pop(L, 1);
 }
-bool is_color(const std::string &value) {
-    return value.size() == 7 && value[0] == '#' &&
+bool is_color(const std::string &value, bool alpha = false) {
+    return (value.size() == 7 || (alpha && value.size() == 9)) && value[0] == '#' &&
            value.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos;
 }
 // Pushes the optional table `name`, checking its keys; returns false when it is absent. The
@@ -140,13 +140,44 @@ Command command(lua_State *L) {
 }
 void read_shell(lua_State *L, ShellConfig &shell) {
     if (!section(L, "shell",
-                 {"enabled", "panel_height", "accent", "panel_color", "text_color", "wallpaper",
+                 {"enabled", "panel_height", "panel_position", "panel_margin", "panel_radius",
+                  "font", "font_size", "accent", "panel_color", "text_color", "wallpaper",
                   "launchers"})) {
         lua_pop(L, 1);
         return;
     }
     boolean(L, "enabled", "shell.enabled", shell.enabled);
-    shell.panel_height = integer(L, "panel_height", 52, 32, 100);
+    shell.panel_height = integer(L, "panel_height", 52, 24, 100);
+    lua_getfield(L, -1, "panel_position");
+    if (!lua_isnil(L, -1)) {
+        auto position = string(L, -1, "panel_position");
+        if (position != "top" && position != "bottom")
+            fail("panel_position must be \"top\" or \"bottom\"");
+        shell.panel_top = position == "top";
+    }
+    lua_pop(L, 1);
+    // One number for every side, or { top, right, bottom, left } by name.
+    lua_getfield(L, -1, "panel_margin");
+    if (lua_isinteger(L, -1)) {
+        auto margin = lua_tointeger(L, -1);
+        if (margin < 0 || margin > 200)
+            fail("panel_margin is out of range");
+        for (auto &side : shell.panel_margin)
+            side = static_cast<int>(margin);
+    } else if (!lua_isnil(L, -1)) {
+        table(L, -1, "panel_margin");
+        keys(L, -1, {"top", "right", "bottom", "left"});
+        int index = 0;
+        for (const char *side : {"top", "right", "bottom", "left"})
+            shell.panel_margin[index++] = integer(L, side, 0, 0, 200);
+    }
+    lua_pop(L, 1);
+    shell.panel_radius = integer(L, "panel_radius", 0, 0, 50);
+    lua_getfield(L, -1, "font");
+    if (!lua_isnil(L, -1))
+        shell.font = string(L, -1, "font");
+    lua_pop(L, 1);
+    shell.font_size = integer(L, "font_size", 12, 6, 48);
     for (auto [key, target] : {std::pair{"accent", &shell.accent},
                                {"panel_color", &shell.panel_color},
                                {"text_color", &shell.text_color},
@@ -154,8 +185,8 @@ void read_shell(lua_State *L, ShellConfig &shell) {
         lua_getfield(L, -1, key);
         if (!lua_isnil(L, -1)) {
             *target = string(L, -1, key);
-            if (target != &shell.wallpaper && !is_color(*target))
-                fail(std::string(key) + " must be #RRGGBB");
+            if (target != &shell.wallpaper && !is_color(*target, true))
+                fail(std::string(key) + " must be #RRGGBB or #RRGGBBAA");
         }
         lua_pop(L, 1);
     }

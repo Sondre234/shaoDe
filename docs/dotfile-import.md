@@ -58,18 +58,18 @@ shaoDe before it can be imported, **won't** = deliberately not carried over.
 | --- | --- | --- | --- | --- |
 | Background color | — | `appearance.background` | done | no |
 | Accent / panel / text colors | wallbash, pywal, waybar `@define-color` | `shell.accent`, `panel_color`, `text_color` | done | no |
-| Panel transparency | waybar `background: rgba(…)` | `shell.panel_color` as `#RRGGBBAA` | missing | no |
+| Panel transparency | waybar `background: rgba(…)` | `shell.panel_color` as `#RRGGBBAA` | done | no |
 | Wallpaper | hyprpaper, swww, HyDE current wallpaper | `shell.wallpaper` | done | no |
-| Font family and size | waybar `font-family`, `font-size` | — | missing | no |
+| Font family and size | waybar `font-family`, `font-size` | `shell.font`, `shell.font_size` | done | no |
 
 ### Bar
 
 | Setting | Source | shaoDe setting | Status | Importer |
 | --- | --- | --- | --- | --- |
 | Height | waybar `height` | `shell.panel_height` | done | no |
-| Top or bottom | waybar `position` | — | missing | no |
-| Margins (floating bar) | waybar `margin-*` | — | missing | no |
-| Corner radius | `window#waybar { border-radius }` | — | missing | no |
+| Top or bottom | waybar `position` | `shell.panel_position` | done | no |
+| Margins (floating bar) | waybar `margin-*` | `shell.panel_margin` | done | no |
+| Corner radius | `window#waybar { border-radius }` | `shell.panel_radius` | done | no |
 | Module layout | waybar `modules-*` | — | won't | — |
 
 ### Windows

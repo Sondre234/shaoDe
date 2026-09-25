@@ -14,9 +14,18 @@ ShellController::ShellController(std::filesystem::path path, QObject *parent)
     subscribe();
 }
 ShellController::~ShellController() { clearApps(); }
-QColor ShellController::accent() const { return QColor::fromString(config_.shell.accent); }
-QColor ShellController::panelColor() const { return QColor::fromString(config_.shell.panel_color); }
-QColor ShellController::textColor() const { return QColor::fromString(config_.shell.text_color); }
+namespace {
+// Configuration colors are #RRGGBB or CSS-style #RRGGBBAA; Qt reads eight digits as #AARRGGBB.
+QColor color(const std::string &value) {
+    auto result = QColor::fromString(QString::fromStdString(value.substr(0, 7)));
+    if (value.size() == 9)
+        result.setAlpha(std::stoi(value.substr(7), nullptr, 16));
+    return result;
+}
+} // namespace
+QColor ShellController::accent() const { return color(config_.shell.accent); }
+QColor ShellController::panelColor() const { return color(config_.shell.panel_color); }
+QColor ShellController::textColor() const { return color(config_.shell.text_color); }
 QColor ShellController::background() const {
     return QColor::fromRgbF(config_.settings.background[0], config_.settings.background[1],
                             config_.settings.background[2]);

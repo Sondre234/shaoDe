@@ -43,8 +43,16 @@ with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
             assert "shaoDe surface rendered: shaoDe desktop" in shell_log.read_text()
 
             def check_panel(height):
-                subprocess.run([probe, "--external-panel", str(height)], env=env,
-                               check=True, timeout=5)
+                # A render marker can precede the compositor applying the new layer state.
+                last = []
+
+                def reserved():
+                    last[:] = [subprocess.run([probe, "--external-panel", str(height)], env=env,
+                                              capture_output=True, text=True, timeout=5)]
+                    return last[0].returncode == 0
+
+                wait_for(reserved, processes, f"panel reservation of {height}",
+                         detail=lambda: last[0].stderr)
 
             check_panel(52)
             # The launcher action reaches the panel on the output under the pointer.
@@ -72,6 +80,22 @@ with tempfile.TemporaryDirectory(prefix="shaode-shell-test-") as directory:
             desktop.send_signal(signal.SIGHUP)
             wait_for(lambda: shell_log.read_text().count(marker) >= 2,
                      processes, "panel resize after reload")
+            check_panel(72)
+            # A floating bar on top reserves its height plus the margins above and below it.
+            floating = (source.replace('panel_position = "bottom"', 'panel_position = "top"')
+                        .replace("panel_margin = 0,",
+                                 "panel_margin = { top = 6, bottom = 4, left = 12, right = 12 },")
+                        .replace("panel_radius = 0,", "panel_radius = 10,"))
+            assert 'panel_position = "top"' in floating and "top = 6" in floating
+            config.write_text(floating)
+            desktop.send_signal(signal.SIGHUP)
+            wait_for(lambda: shell_log.read_text().count(marker) >= 3,
+                     processes, "panel moved to the top after reload")
+            check_panel(62)
+            config.write_text(source.replace("panel_height = 52", "panel_height = 72"))
+            desktop.send_signal(signal.SIGHUP)
+            wait_for(lambda: shell_log.read_text().count(marker) >= 4,
+                     processes, "panel back at the bottom after reload")
             check_panel(72)
             # Invalid data must not kill the shell or replace the active reservation.
             config.write_text("return { shell = { panel_height = -1 } }")

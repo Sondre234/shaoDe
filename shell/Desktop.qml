@@ -21,7 +21,7 @@ Rectangle {
     }
     Text {
         anchors.right: parent.right; anchors.rightMargin: 40
-        anchors.bottom: parent.bottom; anchors.bottomMargin: shell.panelHeight + 35
+        anchors.bottom: parent.bottom; anchors.bottomMargin: (shell.panelTop ? 0 : shell.panelExtent) + 35
         text: "shaoDe"; font.pixelSize: 32; font.weight: Font.Light
         color: shell.textColor; opacity: 0.18
     }
@@ -31,7 +31,7 @@ Rectangle {
         onClicked: function(mouse) {
             menu.visible = mouse.button === Qt.RightButton
             menu.x = Math.max(0, Math.min(mouse.x, desktop.width - menu.width - 8))
-            menu.y = Math.max(0, Math.min(mouse.y, desktop.height - shell.panelHeight - menu.height - 8))
+            menu.y = Math.max(shell.panelTop ? shell.panelExtent : 0, Math.min(mouse.y, desktop.height - (shell.panelTop ? 0 : shell.panelExtent) - menu.height - 8))
         }
     }
     Column {

@@ -26,6 +26,11 @@ struct Launcher {
 struct ShellConfig {
     bool enabled = true;
     int panel_height = 52;
+    bool panel_top = false;             // panel_position = "top"
+    int panel_margin[4] = {0, 0, 0, 0}; // top, right, bottom, left: a floating bar
+    int panel_radius = 0;
+    std::string font;   // family; empty: the Qt default
+    int font_size = 12; // taskbar text, in pixels
     std::string accent = "#7da8ff";
     std::string panel_color = "#151e2c";
     std::string text_color = "#edf2fa";

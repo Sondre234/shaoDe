@@ -61,10 +61,7 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
         layer_->setScreen(screen);
         layer_->setScope(desktop ? "shaode-desktop" : "shaode-panel");
         layer_->setLayer(desktop ? W::LayerBackground : W::LayerTop);
-        layer_->setAnchors(
-            desktop ? W::Anchors(W::AnchorLeft | W::AnchorRight | W::AnchorTop | W::AnchorBottom)
-                    : W::Anchors(W::AnchorLeft | W::AnchorRight | W::AnchorBottom));
-        layer_->setExclusiveZone(desktop ? -1 : controller.panelHeight());
+        placeLayer();
         layer_->setKeyboardInteractivity(W::KeyboardInteractivityNone);
         layer_->setActivateOnShow(false);
     }
@@ -72,10 +69,7 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
     resizeForContent();
     setSource(QUrl(desktop ? "qrc:/shell/Desktop.qml" : "qrc:/shell/Panel.qml"));
     connect(&controller, &ShellController::configChanged, this, [this] {
-#if SHAODE_LAYER_SHELL
-        if (layer_ && !desktop_)
-            layer_->setExclusiveZone(controller_.panelHeight());
-#endif
+        placeLayer();
         resizeForContent();
     });
     connect(&controller, &ShellController::launcherRequested, this, [this](const QString &output) {
@@ -94,11 +88,28 @@ ShellView::ShellView(ShellController &controller, QScreen *screen, bool desktop,
         }
     });
 }
+// The panel's surface spans the output's width and the bar's margins; the bar is drawn inset.
+void ShellView::placeLayer() {
+#if SHAODE_LAYER_SHELL
+    if (!layer_)
+        return;
+    using W = LayerShellQt::Window;
+    if (desktop_) {
+        layer_->setAnchors(
+            W::Anchors(W::AnchorLeft | W::AnchorRight | W::AnchorTop | W::AnchorBottom));
+        layer_->setExclusiveZone(-1);
+        return;
+    }
+    layer_->setAnchors(W::Anchors(W::AnchorLeft | W::AnchorRight |
+                                  (controller_.panelTop() ? W::AnchorTop : W::AnchorBottom)));
+    layer_->setExclusiveZone(controller_.panelExtent());
+#endif
+}
 void ShellView::resizeForContent() {
     int width = preview_ ? 1100 : screen()->geometry().width();
     int height = desktop_ ? (preview_ ? 680 : screen()->geometry().height())
                           : (expanded_ ? std::min(560, screen()->geometry().height())
-                                       : controller_.panelHeight());
+                                       : controller_.panelExtent());
     resize(width, height);
 #if SHAODE_LAYER_SHELL
     if (layer_)

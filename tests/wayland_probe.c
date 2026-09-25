@@ -168,8 +168,11 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time) 
     } else if (probe->stage == 1 && probe->maximized) {
         if (probe->width <= 320 || probe->height <= 240)
             die("maximize did not resize window");
-        if (probe->height != probe->output_height - probe->panel_height)
+        if (probe->height != probe->output_height - probe->panel_height) {
+            fprintf(stderr, "wayland probe: maximized height %d, output %d, panel %d\n",
+                    probe->height, probe->output_height, probe->panel_height);
             die("maximize covered the reserved panel area");
+        }
         puts("maximize respected panel reservation and rendered");
         probe->stage = 2;
         xdg_toplevel_unset_maximized(probe->toplevel);
