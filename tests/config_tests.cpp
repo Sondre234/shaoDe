@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
     try {
         require(argc == 2, "example config path required");
         auto config = shaode::load_config(argv[1]);
-        require(config.bindings.size() == 24, "example shortcuts missing");
+        require(config.bindings.size() == 28, "example shortcuts missing");
         require(config.shell.enabled && config.shell.panel_height == 52 &&
                     config.shell.launchers.size() == 2,
                 "example shell settings missing");
@@ -42,6 +42,8 @@ int main(int argc, char **argv) {
         require(toggle && toggle->action == SH_TOGGLE_TILING, "tiling toggle binding missing");
         require(shaode::parse_config("return {layout={tiling=true}}").settings.tiling,
                 "layout.tiling not parsed");
+        auto *focus = config.binding(SH_LOGO, XKB_KEY_Left);
+        require(focus && focus->action == SH_FOCUS_LEFT, "directional focus binding missing");
         auto *launcher = config.binding(SH_LOGO, XKB_KEY_r);
         require(launcher && launcher->action == SH_LAUNCHER, "launcher binding missing");
         require(shaode::parse_action("toggle_floating") == SH_TOGGLE_FLOATING,
@@ -202,7 +204,7 @@ int main(int argc, char **argv) {
             config = shaode::parse_config("return {layout={gap=999}}");
         } catch (const std::exception &) {
         }
-        require(config.settings.gap_inner == 8 && config.bindings.size() == 24,
+        require(config.settings.gap_inner == 8 && config.bindings.size() == 28,
                 "failed reload changed active configuration");
         std::cout << "Configuration validation, bindings, and transactional loading passed\n";
     } catch (const std::exception &error) {

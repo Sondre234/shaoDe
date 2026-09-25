@@ -69,8 +69,9 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Super + T | Arrange the current output's windows in a grid (floating mode) |
 | Super + Shift + T | Turn automatic tiling on or off |
 | Alt + Tab | Cycle windows |
-| Super + Left/Right | Snap to half the output |
-| Super + Up/Down | Maximize / restore saved floating geometry |
+| Super + Left/Right/Up/Down | Focus the nearest window in that direction |
+| Super + Shift + Left/Right | Snap to half the output |
+| Super + Shift + Up/Down | Maximize / restore saved floating geometry |
 | Super + 1–4 | Switch to workspace 1–4 |
 | Super + Shift + 1–4 | Move the focused window to workspace 1–4 |
 | Super + Ctrl + Left/Right | Previous / next workspace |

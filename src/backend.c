@@ -333,6 +333,7 @@ static void create_popup(struct sh_server *server, struct wlr_xdg_popup *popup,
 static void lock_output_presented(struct sh_output *output);
 static void notify_subscribers(struct sh_server *server);
 static void request_launcher(struct sh_server *server);
+static void process_cursor_motion(struct sh_server *server, uint32_t time);
 static void refit_fullscreen(struct sh_server *server);
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void refresh_frame(struct sh_toplevel *toplevel);
@@ -693,6 +694,51 @@ static void move_to_workspace(struct sh_server *server, int workspace) {
     }
 }
 
+/* The nearest visible window from the focused one in a direction: first those level with
+ * it (overlapping across the direction), then by distance between centres. */
+static void focus_direction(struct sh_server *server, enum sh_action action) {
+    struct sh_toplevel *current = current_toplevel(server);
+    if (!current || server->locked)
+        return;
+    bool horizontal = action == SH_FOCUS_LEFT || action == SH_FOCUS_RIGHT;
+    int sign = action == SH_FOCUS_LEFT || action == SH_FOCUS_UP ? -1 : 1;
+    struct wlr_box from = toplevel_box(current);
+    double from_x = from.x + from.width / 2.0, from_y = from.y + from.height / 2.0;
+    struct sh_toplevel *best = NULL, *toplevel;
+    bool best_level = false;
+    double best_distance = 0;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel == current || !toplevel_visible(toplevel))
+            continue;
+        struct wlr_box box = toplevel_box(toplevel);
+        double x = box.x + box.width / 2.0, y = box.y + box.height / 2.0;
+        double along = horizontal ? x - from_x : y - from_y;
+        if (along * sign <= 0)
+            continue;
+        bool level = horizontal
+                         ? box.y < from.y + from.height && from.y < box.y + box.height
+                         : box.x < from.x + from.width && from.x < box.x + box.width;
+        double distance = hypot(x - from_x, y - from_y);
+        if (!best || (level && !best_level) ||
+            (level == best_level && distance < best_distance)) {
+            best = toplevel;
+            best_level = level;
+            best_distance = distance;
+        }
+    }
+    if (!best)
+        return;
+    focus_toplevel(best);
+    // Focus follows the mouse on its next move, so take the pointer along.
+    if (server_settings(server)->focus_follows_mouse) {
+        struct wlr_box box = toplevel_box(best);
+        wlr_cursor_warp(server->cursor, NULL, box.x + box.width / 2.0, box.y + box.height / 2.0);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        process_cursor_motion(server, now.tv_sec * 1000 + now.tv_nsec / 1000000);
+    }
+}
+
 /* Shared by key bindings and the control socket. */
 static void run_action(struct sh_server *server, enum sh_action action, int argument) {
     int count = server_settings(server)->workspaces;
@@ -743,6 +789,12 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
         break;
     case SH_LAUNCHER:
         request_launcher(server);
+        break;
+    case SH_FOCUS_LEFT:
+    case SH_FOCUS_RIGHT:
+    case SH_FOCUS_UP:
+    case SH_FOCUS_DOWN:
+        focus_direction(server, action);
         break;
     case SH_TOGGLE_FLOATING:
         if (current && current->tiled) {

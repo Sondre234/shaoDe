@@ -545,6 +545,10 @@ sh_action parse_action(const std::string &name) {
         {"toggle_tiling", SH_TOGGLE_TILING},
         {"toggle_floating", SH_TOGGLE_FLOATING},
         {"launcher", SH_LAUNCHER},
+        {"focus_left", SH_FOCUS_LEFT},
+        {"focus_right", SH_FOCUS_RIGHT},
+        {"focus_up", SH_FOCUS_UP},
+        {"focus_down", SH_FOCUS_DOWN},
     };
     for (const auto &[candidate, action] : actions)
         if (name == candidate)

@@ -124,6 +124,21 @@ with tempfile.TemporaryDirectory(prefix="shaode-tiling-test-") as directory:
                      disjoint(boxes()), processes,
                      "fourth window split a tile")
 
+            # Directional focus moves between tiles, never away from the asked direction.
+            def focused_center():
+                (x, y, width, height), = [w[3:] for w in windows() if w[0] == 1 and w[1]]
+                return x + width / 2, y + height / 2
+            moves = 0
+            for direction, axis, sign in (("left", 0, -1), ("right", 0, 1), ("right", 0, 1),
+                                          ("up", 1, -1), ("down", 1, 1), ("left", 0, -1)):
+                before = focused_center()
+                msg("focus_" + direction)
+                after = focused_center()
+                assert after == before or (after[axis] - before[axis]) * sign > 0, \
+                    (direction, before, after)
+                moves += after != before
+            assert moves >= 3, f"directional focus barely moved: {moves}"
+
             # Floating the focused window returns it to its floating size and reflows the rest.
             msg("toggle_floating")
             wait_for(lambda: sorted(b[2:] for b in boxes())[0] == (320, 240) and
@@ -166,7 +181,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-tiling-test-") as directory:
             del processes[1:]
             server.terminate()
             assert server.wait(timeout=5) == 0, log.read_text()
-            print("Tiling toggle, dwindle splits, workspaces, floating, and subscription passed")
+            print("Tiling toggle, dwindle splits, directional focus, workspaces, floating, and "
+                  "subscription passed")
         except Exception:
             print(log.read_text(), file=sys.stderr)
             raise
