@@ -223,6 +223,67 @@ Item {
                     } }
                 }
             }
+            // This output's workspaces: the current one highlighted, a dot under those with
+            // windows. Scrolling pages through them; clicking a number switches to it.
+            Row {
+                id: workspaceIndicator
+                objectName: "workspaceIndicator"
+                readonly property var workspaceState: shell.workspaces[outputName] || ({ current: 1, occupied: [] })
+                function show(number) {
+                    if (number >= 1 && number <= shell.workspaceCount && number !== workspaceState.current)
+                        shell.showWorkspace(outputName, number)
+                }
+                visible: shell.workspaceCount > 1
+                spacing: 2
+                Layout.alignment: Qt.AlignVCenter
+                Repeater {
+                    model: shell.workspaceCount
+                    delegate: Button {
+                        id: workspaceButton
+                        required property int index
+                        readonly property int number: index + 1
+                        readonly property bool current: workspaceIndicator.workspaceState.current === number
+                        readonly property bool occupied: workspaceIndicator.workspaceState.occupied.indexOf(number) >= 0
+                        objectName: "workspace" + number
+                        width: 26; height: bar.height - 14
+                        onClicked: { root.closeMenus(); workspaceIndicator.show(number) }
+                        Accessible.name: "Workspace " + number
+                        background: Rectangle {
+                            radius: 6
+                            color: workspaceButton.current ? Qt.lighter(shell.panelColor, 1.8) : (workspaceButton.hovered ? Qt.lighter(shell.panelColor, 1.4) : "transparent")
+                        }
+                        contentItem: Item {
+                            Text {
+                                anchors.centerIn: parent
+                                text: workspaceButton.number
+                                color: workspaceButton.current ? shell.accent : shell.textColor
+                                font.pixelSize: shell.fontSize; font.family: root.uiFont
+                                font.weight: workspaceButton.current ? Font.DemiBold : Font.Normal
+                            }
+                            Rectangle {
+                                visible: workspaceButton.occupied
+                                anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom
+                                width: 4; height: 4; radius: 2
+                                color: workspaceButton.current ? shell.accent : shell.textColor
+                            }
+                        }
+                    }
+                }
+                // A wheel notch (or a touchpad's worth of travel) moves one workspace, stopping
+                // at either end; down or right goes to the next.
+                WheelHandler {
+                    property real travel: 0
+                    onWheel: (event) => {
+                        travel += event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
+                        var steps = travel > 0 ? Math.floor(travel / 120) : Math.ceil(travel / 120)
+                        travel -= steps * 120
+                        if (steps !== 0) {
+                            var target = workspaceIndicator.workspaceState.current - steps
+                            workspaceIndicator.show(Math.max(1, Math.min(shell.workspaceCount, target)))
+                        }
+                    }
+                }
+            }
             Button {
                 id: tilingToggle
                 objectName: "tilingToggle"

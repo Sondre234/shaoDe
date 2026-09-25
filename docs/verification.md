@@ -156,3 +156,16 @@ capture source. `compositor_smoke` checks that every one of these globals is adv
 Not yet exercised: screen sharing end to end through xdg-desktop-portal-wlr and
 PipeWire, the D-Bus environment export in a physical `--session`, drag-and-drop, pointer
 lock, and popup placement at output edges.
+
+## Per-monitor workspaces checkpoint
+
+Added 2026-09-25. `output_workspace_smoke` runs two headless outputs with real clients:
+both start on workspace 1, switching one (by `output NAME` or through the focused output)
+leaves the other alone, each window's visibility follows its own output's workspace,
+`move_to_workspace` keeps a window on its output, a window placed onto the other output
+joins the workspace showing there, and the `subscribe` stream reports each output. The
+shell UI test checks the panel's workspace indicator (current and occupied marks, click,
+and wheel paging) against a stand-in control socket, and a headless run with the real
+shell on two outputs showed each panel marking its own output's workspace (`grim`).
+Not yet exercised on hardware: pointer drags between monitors, wheel paging with a real
+mouse or touchpad, and the remembered workspaces across a VT switch.

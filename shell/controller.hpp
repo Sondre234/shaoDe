@@ -33,6 +33,8 @@ class ShellController : public QObject {
     Q_PROPERTY(TaskModel *tasks READ tasks CONSTANT)
     Q_PROPERTY(bool tiling READ tiling NOTIFY tilingChanged)
     Q_PROPERTY(bool tilingAvailable READ tilingAvailable NOTIFY tilingChanged)
+    Q_PROPERTY(int workspaceCount READ workspaceCount NOTIFY configChanged)
+    Q_PROPERTY(QVariantMap workspaces READ workspaces NOTIFY workspacesChanged)
   public:
     explicit ShellController(std::filesystem::path path, QObject *parent = nullptr);
     ~ShellController() override;
@@ -59,17 +61,22 @@ class ShellController : public QObject {
     TaskModel *tasks() { return &tasks_; }
     bool tiling() const { return tiling_; }
     bool tilingAvailable() const { return subscribed_; }
+    int workspaceCount() const { return config_.settings.workspaces; }
+    // By output name: {current: N, occupied: [N, ...]}, numbered from 1.
+    QVariantMap workspaces() const { return workspaces_; }
     Q_INVOKABLE bool launch(const QString &id);
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void reload();
     Q_INVOKABLE void clearError();
     Q_INVOKABLE void toggleTiling();
+    Q_INVOKABLE void showWorkspace(const QString &output, int number);
   Q_SIGNALS:
     void configChanged();
     void appsChanged();
     void errorChanged();
     void disabled();
     void tilingChanged();
+    void workspacesChanged();
     void launcherRequested(const QString &output);
 
   private:
@@ -87,7 +94,9 @@ class ShellController : public QObject {
     // Compositor state from its control socket ($SHAODE_SOCKET), kept open by "subscribe".
     QLocalSocket *state_ = nullptr;
     bool subscribed_ = false, tiling_ = false;
+    QVariantMap workspaces_, nextWorkspaces_;
     void subscribe();
+    void request(const QByteArray &line, const QString &unavailable);
     void report(const QString &message);
     void clearApps();
     static QVariantMap record(const App &app);
