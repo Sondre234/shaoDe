@@ -739,6 +739,33 @@ static void focus_direction(struct sh_server *server, enum sh_action action) {
     }
 }
 
+/* Hands the output under the pointer or the focused window's box to the configuration side, which
+ * runs grim in the background. */
+static bool take_screenshot(struct sh_server *server, enum sh_screenshot_mode mode, char *error,
+                            size_t error_size) {
+    const char *output_name = NULL;
+    struct sh_rect box = {0};
+    if (mode == SH_SCREENSHOT_OUTPUT) {
+        struct wlr_output *output = wlr_output_layout_output_at(
+            server->output_layout, server->cursor->x, server->cursor->y);
+        if (!output) {
+            snprintf(error, error_size, "no output under the pointer");
+            return false;
+        }
+        output_name = output->name;
+    } else if (mode == SH_SCREENSHOT_WINDOW) {
+        struct sh_toplevel *current = current_toplevel(server);
+        if (!current) {
+            snprintf(error, error_size, "no focused window");
+            return false;
+        }
+        struct wlr_box geometry = toplevel_box(current);
+        box = (struct sh_rect){geometry.x, geometry.y, geometry.width, geometry.height};
+    }
+    return server->callbacks->screenshot(server->callbacks->userdata, mode, output_name, &box,
+                                         error, error_size);
+}
+
 /* Shared by key bindings and the control socket. */
 static void run_action(struct sh_server *server, enum sh_action action, int argument) {
     int count = server_settings(server)->workspaces;
@@ -796,6 +823,12 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
     case SH_FOCUS_DOWN:
         focus_direction(server, action);
         break;
+    case SH_SCREENSHOT: {
+        char error[256] = "";
+        if (!take_screenshot(server, (enum sh_screenshot_mode)argument, error, sizeof(error)))
+            wlr_log(WLR_ERROR, "Screenshot not taken: %s", error);
+        break;
+    }
     case SH_TOGGLE_FLOATING:
         if (current && current->tiled) {
             current->floating = true;
@@ -3479,6 +3512,17 @@ static void control_handle(struct sh_server *server, int fd, const char *request
         char reply[300];
         snprintf(reply, sizeof(reply), "error: %s\n", error[0] ? error : "unknown request");
         control_reply(fd, reply);
+        return;
+    }
+    if (action == SH_SCREENSHOT) {
+        // Report why no screenshot started, such as grim missing, to the caller.
+        if (!take_screenshot(server, (enum sh_screenshot_mode)argument, error, sizeof(error))) {
+            char reply[300];
+            snprintf(reply, sizeof(reply), "error: %s\n", error);
+            control_reply(fd, reply);
+            return;
+        }
+        control_reply(fd, "ok\n");
         return;
     }
     run_action(server, action, argument);

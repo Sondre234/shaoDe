@@ -76,6 +76,9 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Super + Shift + 1–4 | Move the focused window to workspace 1–4 |
 | Super + Ctrl + Left/Right | Previous / next workspace |
 | Super + Shift + R | Reload Lua configuration |
+| Print | Screenshot of a region you select |
+| Shift + Print | Screenshot of the monitor under the pointer |
+| Super + Print | Screenshot of the focused window |
 
 The host compositor can consume shortcuts before the nested compositor receives
 them: a host that grabs Super (Hyprland, GNOME) keeps these, so set `mod = "Alt"` in
@@ -190,7 +193,8 @@ it with `theme = "theme.lua"` and overrides any of it; `--dry-run` only prints. 
 still lacks (rounding, blur, shadows).
 
 A control socket runs any Lua action from scripts or other tools:
-`shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`. The query
+`shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`,
+`shaode msg screenshot window`. The query
 `shaode msg get workspace` prints the current workspace, `shaode msg get tiling` prints
 `on` or `off`, `shaode msg get outputs` prints one tab-separated line per monitor (name,
 enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
@@ -216,6 +220,17 @@ pointer lock and relative motion for games, and xdg-foreign for portal dialogs.
 xdg-activation lets an application raise itself, so a link clicked in a chat brings the
 browser forward; shaoDe honours every valid token and does not prevent focus stealing.
 Popup menus are kept on the output of their window.
+
+The `screenshot` action (Print, or `shaode msg screenshot region|output|window`) runs
+[`grim`](https://sr.ht/~emersion/grim/), with [`slurp`](https://github.com/emersion/slurp)
+to select a region, and saves `Screenshot_<date>_<time>.png` in `$XDG_PICTURES_DIR/Screenshots`
+(from the environment or `user-dirs.dirs`), else `~/Pictures/Screenshots`. The `output` mode
+captures the monitor under the pointer and `window` the focused window's area as it appears on
+screen, including anything overlapping it. It also copies the image to the clipboard with
+`wl-copy` and announces the file with `notify-send`, when they are installed. Lua
+`screenshots = { directory = "~/Shots", clipboard = false, notify = false }` changes that; in a
+binding, `mode = "output"` picks the mode (default `region`). Without grim (or slurp for a
+region), `shaode msg screenshot` fails with a message and a key binding logs one.
 
 Screenshots and screen sharing use wlr-screencopy, export-dmabuf, and
 ext-image-copy-capture, so `grim` works directly and Discord, OBS, or a browser share a
@@ -253,7 +268,8 @@ or overwrites a personal configuration automatically.
 CTest covers configuration validation, grid and dwindle layout bounds/non-overlap,
 and a headless compositor with real xdg-shell clients. The integration tests verify
 mapping, frame callbacks, maximize/restore, unmapping, accepted/rejected reloads,
-workspaces, tiling on/off with splitting and floating, session locking, XWayland
+workspaces, tiling on/off with splitting and floating, screenshots (with stand-ins for grim,
+slurp, and wl-copy), session locking, XWayland
 (when available), and clean shutdown in an isolated temporary runtime directory. Shell builds also render
 both QML surfaces using Qt's offscreen software backend. No display session is needed.
 

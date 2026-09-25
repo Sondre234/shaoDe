@@ -360,7 +360,7 @@ Config read(lua_State *L) {
     table(L, -1, "configuration result");
     keys(L, -1,
          {"version", "theme", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs",
-          "windows", "bindings", "startup", "shell", "xwayland"});
+          "windows", "bindings", "startup", "shell", "xwayland", "screenshots"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
         fail("unsupported version");
@@ -450,13 +450,26 @@ Config read(lua_State *L) {
     }
     lua_pop(L, 1);
     read_windows(L, config);
+    if (section(L, "screenshots", {"directory", "clipboard", "notify"})) {
+        lua_getfield(L, -1, "directory");
+        if (!lua_isnil(L, -1)) {
+            auto directory = string(L, -1, "screenshots.directory");
+            if (!directory.starts_with('/') && !directory.starts_with("~/"))
+                fail("screenshots.directory must be absolute or start with ~/");
+            config.screenshots.directory = directory;
+        }
+        lua_pop(L, 1);
+        boolean(L, "clipboard", "screenshots.clipboard", config.screenshots.clipboard);
+        boolean(L, "notify", "screenshots.notify", config.screenshots.notify);
+    }
+    lua_pop(L, 1);
     lua_getfield(L, -1, "bindings");
     if (!lua_isnil(L, -1)) {
         auto size = array_size(L, -1, 512);
         for (size_t i = 1; i <= size; ++i) {
             lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
             table(L, -1, "binding");
-            keys(L, -1, {"mods", "key", "action", "command", "workspace"});
+            keys(L, -1, {"mods", "key", "action", "command", "workspace", "mode"});
             Binding binding{};
             auto key = field(L, "key");
             binding.keysym =
@@ -491,6 +504,13 @@ Config read(lua_State *L) {
                     fail("workspace is only valid with workspace actions");
                 lua_pop(L, 1);
             }
+            lua_getfield(L, -1, "mode");
+            if (!lua_isnil(L, -1)) {
+                if (binding.action != SH_SCREENSHOT)
+                    fail("mode is only valid with screenshot");
+                binding.screenshot = parse_screenshot_mode(string(L, -1, "mode"));
+            }
+            lua_pop(L, 1);
             if (config.binding(binding.modifiers, binding.keysym))
                 fail("duplicate keyboard binding");
             config.bindings.push_back(std::move(binding));
@@ -549,6 +569,7 @@ sh_action parse_action(const std::string &name) {
         {"focus_right", SH_FOCUS_RIGHT},
         {"focus_up", SH_FOCUS_UP},
         {"focus_down", SH_FOCUS_DOWN},
+        {"screenshot", SH_SCREENSHOT},
     };
     for (const auto &[candidate, action] : actions)
         if (name == candidate)
@@ -558,6 +579,15 @@ sh_action parse_action(const std::string &name) {
 
 bool action_takes_workspace(sh_action action) {
     return action == SH_WORKSPACE || action == SH_MOVE_TO_WORKSPACE;
+}
+
+sh_screenshot_mode parse_screenshot_mode(const std::string &name) {
+    for (auto [candidate, mode] : {std::pair{"region", SH_SCREENSHOT_REGION},
+                                   {"output", SH_SCREENSHOT_OUTPUT},
+                                   {"window", SH_SCREENSHOT_WINDOW}})
+        if (name == candidate)
+            return mode;
+    fail("screenshot mode must be \"region\", \"output\", or \"window\"");
 }
 
 float Config::window_opacity(const std::string &app_id, bool active) const {

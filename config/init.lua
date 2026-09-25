@@ -42,6 +42,13 @@ return {
         -- by connector or by "desc:" and the start of "make model serial", e.g.:
         -- monitors = { ["DP-3"] = { mode = "2560x1440@200", scale = 1.25 } },
     },
+    screenshots = {
+        -- Saved as Screenshot_<date>_<time>.png; "~/" means your home directory. Empty or unset:
+        -- $XDG_PICTURES_DIR/Screenshots, else ~/Pictures/Screenshots.
+        -- directory = "~/Pictures/Screenshots",
+        clipboard = true, -- also copy the image (needs wl-copy)
+        notify = true, -- announce it with notify-send, when that is installed
+    },
     xwayland = true, -- run X11 applications; Xwayland starts on first use (restart to change)
     shell = {
         enabled = true,
@@ -92,5 +99,9 @@ return {
         { mods = { "Ctrl", mod }, key = "Right", action = "workspace_next" },
         { mods = { "Ctrl", mod }, key = "Left", action = "workspace_prev" },
         { mods = { mod, "Shift" }, key = "r", action = "reload" },
+        -- Screenshots run grim (and slurp to select a region).
+        { mods = {}, key = "Print", action = "screenshot", mode = "region" },
+        { mods = { "Shift" }, key = "Print", action = "screenshot", mode = "output" },
+        { mods = { mod }, key = "Print", action = "screenshot", mode = "window" },
     },
 }
