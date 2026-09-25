@@ -27,9 +27,13 @@ target_compile_options(shaode_config PRIVATE -Wall -Wextra -Wpedantic)
 
 include(CTest)
 if(BUILD_TESTING)
+    # Tests read a copy of the example so a theme.lua generated beside it by `shaode import`
+    # (git-ignored, personal) cannot change what they see.
+    set(EXAMPLE_CONFIG ${CMAKE_CURRENT_BINARY_DIR}/example-config/init.lua)
+    configure_file(config/init.lua ${EXAMPLE_CONFIG} COPYONLY)
     add_executable(config_tests tests/config_tests.cpp)
     target_link_libraries(config_tests PRIVATE shaode_config)
-    add_test(NAME config COMMAND config_tests ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+    add_test(NAME config COMMAND config_tests ${EXAMPLE_CONFIG})
     add_executable(layout_tests tests/layout_tests.cpp)
     target_link_libraries(layout_tests PRIVATE shaode_config)
     add_test(NAME layout COMMAND layout_tests)
@@ -149,17 +153,17 @@ if(SHAODE_BUILD_COMPOSITOR)
         add_test(NAME compositor_smoke COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/compositor_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+            ${EXAMPLE_CONFIG})
         set_tests_properties(compositor_smoke PROPERTIES TIMEOUT 60)
         add_test(NAME workspaces COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/workspace_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+            ${EXAMPLE_CONFIG})
         set_tests_properties(workspaces PROPERTIES TIMEOUT 60)
         add_test(NAME tiling_smoke COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/tiling_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+            ${EXAMPLE_CONFIG})
         set_tests_properties(tiling_smoke PROPERTIES TIMEOUT 60)
         add_test(NAME output_smoke COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/output_smoke.py
@@ -189,7 +193,7 @@ if(SHAODE_BUILD_COMPOSITOR)
         add_test(NAME session_lock COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/lock_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:lock_probe>
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+            ${EXAMPLE_CONFIG})
         set_tests_properties(session_lock PROPERTIES TIMEOUT 60)
         # XWayland coverage needs wlroots built with X support and an Xwayland binary.
         find_program(XWAYLAND_BINARY Xwayland)
@@ -200,7 +204,7 @@ if(SHAODE_BUILD_COMPOSITOR)
             add_test(NAME xwayland_smoke COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/xwayland_smoke.py
                 $<TARGET_FILE:shaode> $<TARGET_FILE:x11_probe> $<TARGET_FILE:wayland_probe>
-                ${CMAKE_CURRENT_SOURCE_DIR}/config/init.lua)
+                ${EXAMPLE_CONFIG})
             set_tests_properties(xwayland_smoke PROPERTIES TIMEOUT 60)
         else()
             message(STATUS "XWayland test skipped: needs an Xwayland binary and wlroots X support")
