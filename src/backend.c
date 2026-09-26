@@ -3893,9 +3893,15 @@ static void xwayland_unmap(struct wl_listener *listener, void *data) {
 
 static void xwayland_associate(struct wl_listener *listener, void *data) {
     struct sh_toplevel *toplevel = wl_container_of(listener, toplevel, x_associate);
+    struct wlr_surface *surface = toplevel->xsurface->surface;
     toplevel->associated = true;
-    add_listener(&toplevel->xsurface->surface->events.map, &toplevel->map, xwayland_map);
-    add_listener(&toplevel->xsurface->surface->events.unmap, &toplevel->unmap, xwayland_unmap);
+    add_listener(&surface->events.map, &toplevel->map, xwayland_map);
+    add_listener(&surface->events.unmap, &toplevel->unmap, xwayland_unmap);
+    // The X11 and Wayland sockets race: Xwayland's first buffer can arrive before the
+    // WL_SURFACE_SERIAL message that pairs it, and wlroots only maps on a later commit. An
+    // unmapped surface gets no frame callbacks, so Xwayland never sends one (Wine dialogs).
+    if (!surface->mapped && wlr_surface_has_buffer(surface))
+        wlr_surface_map(surface);
 }
 
 static void xwayland_dissociate(struct wl_listener *listener, void *data) {
