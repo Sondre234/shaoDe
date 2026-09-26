@@ -83,7 +83,7 @@ return {
         { mods = { mod }, key = "v", action = "toggle_floating" },
         { mods = { mod }, key = "f", action = "fullscreen" },
         { mods = { mod }, key = "t", action = "tile" },
-        { mods = { mod, "Shift" }, key = "t", action = "toggle_tiling" },
+        { mods = { mod }, key = "s", action = "toggle_tiling" },
         { mods = { "Alt" }, key = "Tab", action = "cycle" },
         { mods = { mod }, key = "Left", action = "focus_left" },
         { mods = { mod }, key = "Right", action = "focus_right" },

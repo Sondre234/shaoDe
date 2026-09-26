@@ -87,7 +87,7 @@ development add `-DSHAODE_BUILD_SHELL=OFF`; Qt, GIO, and LayerShellQt are then
 unnecessary. `--no-shell` skips shell startup at runtime. Lua's `shell` table
 controls its colors, panel height, wallpaper path, and pinned launchers;
 `layout.tiling = true` starts with automatic tiling, which the panel button and
-Super+Shift+T toggle at runtime. Reload with Super+Shift+R after editing the file. Invalid configuration retains the last
+Super+S toggle at runtime. Reload with Super+Shift+R after editing the file. Invalid configuration retains the last
 working settings.
 
 `BUILD_TESTING=OFF` omits the test tools/Python requirement. `DESTDIR` staging and
