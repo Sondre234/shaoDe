@@ -59,7 +59,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-style-test-") as directory:
                                   env=env, stdout=output, stderr=output)
         processes = [server]
         try:
-            harness.wait_for(lambda: "Control socket" in log.read_text(), processes, "startup")
+            harness.wait_for(lambda: "Running Wayland compositor" in log.read_text(), processes,
+                             "startup")
             text = log.read_text()
             env["WAYLAND_DISPLAY"] = re.search(r"WAYLAND_DISPLAY=(\S+)", text)[1]
             env["SHAODE_SOCKET"] = re.search(r"Control socket: (\S+)", text)[1]
