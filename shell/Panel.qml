@@ -228,9 +228,21 @@ Item {
                 objectName: "taskList"
                 Layout.fillWidth: true; Layout.fillHeight: true
                 orientation: ListView.Horizontal; spacing: 4; clip: true
+                // Dragging moves a single task, not the list; the wheel scrolls an overflowing one.
+                interactive: false
                 model: shell.tasks
+                moveDisplaced: Transition { NumberAnimation { property: "x"; duration: 120; easing.type: Easing.OutCubic } }
+                WheelHandler {
+                    enabled: taskList.contentWidth > taskList.width
+                    onWheel: (event) => {
+                        var delta = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
+                        taskList.contentX = Math.max(0, Math.min(taskList.contentWidth - taskList.width,
+                                                                 taskList.contentX - delta / 2))
+                    }
+                }
                 delegate: Button {
                     id: taskButton
+                    required property int index
                     required property int taskId
                     required property string title
                     required property string appId
@@ -240,6 +252,21 @@ Item {
                     height: bar.height - 10; y: 5
                     onClicked: { root.closeMenus(); shell.tasks.activate(taskId) }
                     Accessible.name: title
+                    z: reorder.active ? 1 : 0
+                    // The task follows the pointer through the list; the press never becomes a click.
+                    DragHandler {
+                        id: reorder
+                        target: null
+                        yAxis.enabled: false
+                        onCentroidChanged: {
+                            if (!active)
+                                return
+                            var point = taskList.mapFromItem(null, centroid.scenePosition)
+                            var to = taskList.indexAt(point.x + taskList.contentX, taskList.height / 2 + taskList.contentY)
+                            if (to >= 0 && to !== taskButton.index)
+                                taskList.model.move(taskButton.index, to, 1)
+                        }
+                    }
                     background: Rectangle {
                         radius: 6
                         color: taskButton.active ? Qt.lighter(shell.panelColor, 1.7) : (taskButton.hovered ? Qt.lighter(shell.panelColor, 1.4) : "transparent")

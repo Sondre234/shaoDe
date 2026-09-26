@@ -22,6 +22,8 @@ class TaskModel : public QAbstractListModel {
     Q_INVOKABLE void maximize(int id);
     Q_INVOKABLE void close(int id);
     Q_INVOKABLE void showDesktop();
+    // Same signature as ListModel.move, so the panel can reorder either.
+    Q_INVOKABLE void move(int from, int to, int count = 1);
   Q_SIGNALS:
     void disconnected();
 
