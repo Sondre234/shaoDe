@@ -12,7 +12,7 @@ This is an early development project, not a replacement desktop session yet.
 The first working compositor supports real Wayland applications, focus follows mouse,
 mouse move/resize, configurable shortcuts, half-screen snapping, maximize/restore,
 a one-shot grid arrangement, automatic dwindle tiling that can be switched on and
-off, workspaces, and Lua reload. It uses a TinyWL-derived C adapter
+off per monitor, workspaces, and Lua reload. It uses a TinyWL-derived C adapter
 with C++ configuration and placement policy. The Qt shell runs live
 through LayerShellQt, with a panel and desktop on every monitor.
 
@@ -49,7 +49,7 @@ The shell has pinned desktop shortcuts (double-click to launch), a taskbar with
 window activation/minimization and a right-click window menu (maximize/restore,
 minimize, close), a right-click menu on empty bar space (tiling, applications, show
 desktop), an application
-search menu, a tiling on/off button, a clock, and a show-desktop button. Installed applications are read
+search menu, a tiling on/off button for its monitor, a clock, and a show-desktop button. Installed applications are read
 from desktop entries through GIO. Lua configures the panel's height, top or
 bottom placement (`panel_position`), margins that make it float (`panel_margin`, one
 number or `{ top, right, bottom, left }`), corner radius, font and text size, colors
@@ -69,7 +69,7 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Super + V | Float or tile the focused window |
 | Super + F | Toggle fullscreen |
 | Super + T | Arrange the current output's windows in a grid (floating mode) |
-| Super + Shift + T | Turn automatic tiling on or off |
+| Super + Shift + T | Turn automatic tiling on or off for the focused monitor |
 | Alt + Tab | Cycle windows |
 | Super + Left/Right/Up/Down | Focus the nearest window in that direction |
 | Super + Shift + Left/Right | Snap to half the output; again to move to the next monitor |
@@ -109,9 +109,19 @@ client's next buffer.
 
 ## Tiling
 
-The tiling button on the panel (next to the clock), Super + Shift + T, or
-`shaode msg toggle_tiling` switches between floating windows and automatic tiling;
-Lua `layout.tiling = true` starts tiled. Tiling follows Hyprland's default *dwindle*
+Tiling is a setting of each monitor. The tiling button on a monitor's panel (next to the
+clock) switches that monitor between floating windows and automatic tiling; Super + Shift + T
+or `shaode msg toggle_tiling` switches the focused monitor, and
+`shaode msg output HDMI-A-1 toggle_tiling` a named one. Lua `layout.tiling = true` starts
+every monitor tiled, and `tiling` in a monitor's `outputs.monitors` entry overrides it:
+
+```lua
+layout = { tiling = false },
+outputs = { monitors = { ["DP-3"] = { tiling = true } } }, -- only DP-3 tiles
+```
+
+A monitor keeps its toggled state across reloads, and across being unplugged, until its
+configured setting changes; a reload then applies the new setting. Tiling follows Hyprland's default *dwindle*
 layout: every output and workspace has its own binary split tree, each split divides
 its space along the longer side, and a new window opens on the output under the
 pointer, splitting the focused window there (or the one under the pointer) on the side
@@ -120,12 +130,14 @@ space back to its neighbour.
 
 - Mod + right drag on a tile, or dragging its edge, moves the split lines around it.
 - Moving a tile (Mod + left drag or its title bar) lifts it out; dropping it splits
-  the tile under the pointer. A window dropped on another monitor joins the tiling
-  there even if snapping or maximizing had floated it; one floated with Super + V stays
-  floating.
+  the tile under the pointer. A window dropped on another monitor that tiles joins the
+  tiling there even if snapping or maximizing, or its old monitor not tiling, had floated
+  it; one floated with Super + V stays floating. A tile dropped on a monitor that does not
+  tile floats there.
 - Dialogs and fixed-size windows float. Super + V (`toggle_floating`) floats
   or tiles the focused window; snapping or maximizing a tile also floats it.
-- Turning tiling off returns every window to its floating position and size. A window
+- Turning tiling off returns every window of that monitor to its floating position and
+  size. A window
   now tiled on another monitor keeps its size and its place relative to that monitor,
   shrunk and moved to fit inside it.
 - Minimized windows leave the tiling and rejoin it when restored; windows moved to
@@ -134,7 +146,7 @@ space back to its neighbour.
 Not yet: keyboard focus/swap between neighbouring tiles, per-workspace on/off, and
 keeping floating windows above tiles. Windows tiled on a monitor that is unplugged
 keep their place until it returns; a monitor disabled in the config hands its tiles to
-the nearest one.
+the nearest one, where they float if that one does not tile.
 
 Pointer devices in a standalone `--session` take `mouse.speed` (-1 to 1),
 `mouse.acceleration` (`"flat"` or `"adaptive"`), and `mouse.natural_scroll`; touchpads also
@@ -199,8 +211,9 @@ outputs = {
 
 `mode` is `WIDTHxHEIGHT` or `WIDTHxHEIGHT@HZ`; the closest refresh rate at that
 resolution wins. `scale` is fractional, `transform` takes Hyprland's (and Wayland's)
-0–7, and `enabled = false` turns a monitor off (never the last one), and `vrr = true` enables
-adaptive sync where the monitor supports it. A key such as `["desc:ASUSTek COMPUTER INC
+0–7, `enabled = false` turns a monitor off (never the last one), `vrr = true` enables
+adaptive sync where the monitor supports it, and `tiling` overrides `layout.tiling` (see
+[Tiling](#tiling)). A key such as `["desc:ASUSTek COMPUTER INC
 VG27AQ3A"]` matches the start of a monitor's "make model serial" (listed by `shaode msg get
 outputs`), as Hyprland's `desc:` does; a connector-name key wins over it. Monitors with a
 `position` go there, in logical pixels after scaling; the rest follow in a row to their
@@ -221,12 +234,12 @@ still lacks (rounding, blur, shadows).
 A control socket runs any Lua action from scripts or other tools:
 `shaode msg workspace 2`, `shaode msg toggle_tiling`, `shaode msg spawn foot`,
 `shaode msg screenshot window`. Prefixing
-`output NAME` makes workspace actions switch that monitor instead of the focused one:
-`shaode msg output HDMI-A-1 workspace_next`. The query
+`output NAME` makes workspace and tiling actions switch that monitor instead of the focused
+one: `shaode msg output HDMI-A-1 workspace_next`. The query
 `shaode msg get workspace` prints the focused monitor's workspace, `shaode msg get workspaces`
-prints one tab-separated line per monitor (name, current workspace, focused, and the
-workspaces holding windows, such as `1,3`, or `-`), `shaode msg get tiling` prints
-`on` or `off`, `shaode msg get outputs` prints one tab-separated line per monitor (name,
+prints one tab-separated line per monitor (name, current workspace, focused, the
+workspaces holding windows, such as `1,3`, or `-`, and tiling, `on` or `off`),
+`shaode msg get tiling` prints `on` or `off` for the focused monitor, `shaode msg get outputs` prints one tab-separated line per monitor (name,
 enabled, x, y, logical width and height, scale, transform, mode, and "make model serial"), and
 `shaode msg get windows` prints one tab-separated line per window:
 workspace, focused, minimized, tiled, x, y, width, height, app ID, title, monitor, and
@@ -234,9 +247,9 @@ visible. `shaode msg get layers` prints one line per panel or other layer-shell 
 namespace, output, layer (0 background to 3 overlay), and whether it is shown.
 `shaode msg get animations` prints the number of running animations and of window trees in
 the scene (closing windows count until their animation ends), mainly for tests. A client
-that sends `subscribe` keeps its connection and receives `tiling on|off`,
-`workspace N` (the focused monitor's), and one `output NAME N USED` line per monitor (as in
-`get workspaces`) after every change, plus `launcher OUTPUT` when the `launcher` action
+that sends `subscribe` keeps its connection and receives `tiling on|off` and
+`workspace N` (the focused monitor's), and one `output NAME N USED TILING` line per monitor
+(as in `get workspaces`) after every change, plus `launcher OUTPUT` when the `launcher` action
 (Super + R) asks the panel on that monitor to open or close its application menu; the panel uses this. Children of the session find the socket through `SHAODE_SOCKET`. Actions are
 refused while the session is locked.
 

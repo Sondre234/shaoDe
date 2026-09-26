@@ -26,6 +26,11 @@ Item {
         launcherOpen = false
     }
     // Popups open away from the screen edge the bar sits on.
+    // Tiling is per monitor: this panel shows and toggles its own.
+    readonly property bool tiling: {
+        var state = shell.workspaces[outputName]
+        return state && state.tiling !== undefined ? state.tiling : shell.tiling
+    }
     readonly property bool onTop: shell.panelTop
     readonly property string uiFont: shell.fontFamily.length > 0 ? shell.fontFamily : Qt.application.font.family
     readonly property bool floating: shell.panelRadius > 0 || shell.panelMarginLeft > 0 ||
@@ -131,8 +136,8 @@ Item {
             ? [{ text: "Maximize / restore", run: function(id) { shell.tasks.maximize(id) } },
                { text: "Minimize", run: function(id) { shell.tasks.minimize(id) } },
                { text: "Close window", run: function(id) { shell.tasks.close(id) } }]
-            : [{ text: shell.tiling ? "Turn tiling off" : "Turn tiling on", enabled: shell.tilingAvailable,
-                 run: function() { shell.toggleTiling() } },
+            : [{ text: root.tiling ? "Turn tiling off" : "Turn tiling on", enabled: shell.tilingAvailable,
+                 run: function() { shell.toggleTiling(outputName) } },
                { text: "Applications", run: function() { root.launcherOpen = true } },
                { text: "Show desktop", run: function() { shell.tasks.showDesktop() } }]
         visible: root.taskMenuId >= 0 || root.barMenuOpen
@@ -319,24 +324,24 @@ Item {
                 Layout.preferredWidth: 40; Layout.preferredHeight: bar.height - 10
                 enabled: shell.tilingAvailable
                 opacity: enabled ? 1 : 0.4
-                onClicked: { root.closeMenus(); shell.toggleTiling() }
-                Accessible.name: shell.tiling ? "Tiling on" : "Tiling off"
+                onClicked: { root.closeMenus(); shell.toggleTiling(outputName) }
+                Accessible.name: root.tiling ? "Tiling on" : "Tiling off"
                 background: Rectangle {
                     radius: 7
-                    color: shell.tiling ? Qt.lighter(shell.panelColor, 1.8) : (tilingToggle.hovered ? Qt.lighter(shell.panelColor, 1.55) : "transparent")
+                    color: root.tiling ? Qt.lighter(shell.panelColor, 1.8) : (tilingToggle.hovered ? Qt.lighter(shell.panelColor, 1.55) : "transparent")
                 }
                 // On: a dwindle split in the accent colour. Off: two overlapping windows.
                 contentItem: Item {
                     Item {
                         anchors.centerIn: parent; width: 22; height: 16
-                        visible: shell.tiling
+                        visible: root.tiling
                         Rectangle { width: 10; height: 16; radius: 2; color: shell.accent }
                         Rectangle { x: 12; width: 10; height: 7; radius: 2; color: shell.accent }
                         Rectangle { x: 12; y: 9; width: 10; height: 7; radius: 2; color: shell.accent }
                     }
                     Item {
                         anchors.centerIn: parent; width: 22; height: 16
-                        visible: !shell.tiling
+                        visible: !root.tiling
                         Rectangle { width: 15; height: 11; radius: 2; color: "transparent"; border.color: shell.textColor; border.width: 2 }
                         Rectangle { x: 7; y: 5; width: 15; height: 11; radius: 2; color: tilingToggle.hovered ? Qt.lighter(shell.panelColor, 1.55) : shell.panelColor; border.color: shell.textColor; border.width: 2 }
                     }

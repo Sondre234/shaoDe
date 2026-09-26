@@ -62,13 +62,14 @@ class ShellController : public QObject {
     bool tiling() const { return tiling_; }
     bool tilingAvailable() const { return subscribed_; }
     int workspaceCount() const { return config_.settings.workspaces; }
-    // By output name: {current: N, occupied: [N, ...]}, numbered from 1.
+    // By output name: {current: N, occupied: [N, ...], tiling: bool}, numbered from 1.
     QVariantMap workspaces() const { return workspaces_; }
     Q_INVOKABLE bool launch(const QString &id);
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void reload();
     Q_INVOKABLE void clearError();
-    Q_INVOKABLE void toggleTiling();
+    // Toggles tiling on `output`, or on the focused output when it is empty.
+    Q_INVOKABLE void toggleTiling(const QString &output = {});
     Q_INVOKABLE void showWorkspace(const QString &output, int number);
   Q_SIGNALS:
     void configChanged();

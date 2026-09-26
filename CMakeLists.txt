@@ -194,6 +194,10 @@ if(SHAODE_BUILD_COMPOSITOR)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/output_tiling_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)
         set_tests_properties(output_tiling_smoke PROPERTIES TIMEOUT 60)
+        add_test(NAME per_output_tiling_smoke COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/per_output_tiling_smoke.py
+            $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)
+        set_tests_properties(per_output_tiling_smoke PROPERTIES TIMEOUT 60)
         add_test(NAME window_style_smoke COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/window_style_smoke.py
             $<TARGET_FILE:shaode> $<TARGET_FILE:wayland_probe>)

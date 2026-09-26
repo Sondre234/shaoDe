@@ -284,9 +284,11 @@ void read_monitors(lua_State *L, sh_settings &settings) {
             fail("output name is empty");
         copy_text(name, monitor.name, "output name");
         table(L, -1, "monitor settings");
-        keys(L, -1, {"enabled", "mode", "scale", "position", "transform", "vrr"});
+        keys(L, -1, {"enabled", "mode", "scale", "position", "transform", "vrr", "tiling"});
         monitor.enabled = true;
         boolean(L, "enabled", "enabled", monitor.enabled);
+        monitor.tiling = -1;
+        tristate(L, "tiling", "tiling", monitor.tiling);
         lua_getfield(L, -1, "mode");
         if (!lua_isnil(L, -1))
             parse_mode(string(L, -1, "mode"), monitor);

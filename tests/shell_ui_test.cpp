@@ -43,12 +43,15 @@ int main(int argc, char **argv) {
             .toUtf8());
     file.close();
     // A stand-in for the compositor's control socket, with this screen as its only output.
+    // Tiling is per output; the focused one it reports first is always the opposite of this
+    // screen's, as if another monitor had focus, so the panel must show its own.
     const auto output = app.primaryScreen()->name();
     auto state = [&output](bool tiling, int workspace) {
-        return QString("tiling %1\nworkspace %2\noutput %3 %2 1,2\n")
-            .arg(tiling ? "on" : "off")
+        return QString("tiling %1\nworkspace %2\noutput %3 %2 1,2 %4\n")
+            .arg(tiling ? "off" : "on")
             .arg(workspace)
             .arg(output)
+            .arg(tiling ? "on" : "off")
             .toUtf8();
     };
     QLocalServer compositor;
@@ -65,7 +68,7 @@ int main(int argc, char **argv) {
             if (request == "subscribe\n") {
                 subscriber = client;
                 client->write("ok\n" + state(false, 2));
-            } else if (request == "toggle_tiling\n") {
+            } else if (request == "output " + output.toUtf8() + " toggle_tiling\n") {
                 toggled = !toggled;
                 client->write("ok\n");
                 client->disconnectFromServer();
@@ -113,16 +116,17 @@ int main(int argc, char **argv) {
         std::cerr << "launcher remained open after launching\n";
         return 1;
     }
+    auto panelTiling = [&view] { return view.rootObject()->property("tiling").toBool(); };
     auto *tiling = view.rootObject()->findChild<QQuickItem *>("tilingToggle");
     if (!tiling || !QTest::qWaitFor([&] { return controller.tilingAvailable(); }) ||
-        controller.tiling()) {
+        panelTiling()) {
         std::cerr << "tiling state did not arrive from the control socket\n";
         return 1;
     }
     const QPoint toggle =
         tiling->mapToScene(QPointF(tiling->width() / 2, tiling->height() / 2)).toPoint();
     QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, toggle);
-    if (!QTest::qWaitFor([&] { return toggled && controller.tiling(); })) {
+    if (!QTest::qWaitFor([&] { return toggled && panelTiling(); })) {
         std::cerr << "the tiling button did not toggle tiling\n";
         return 1;
     }
@@ -244,7 +248,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, center(menuItem("Turn tiling off")));
-    if (!QTest::qWaitFor([&] { return !toggled && !controller.tiling(); }) ||
+    if (!QTest::qWaitFor([&] { return !toggled && !panelTiling(); }) ||
         view.rootObject()->property("menuOpen").toBool()) {
         std::cerr << "the bar menu did not toggle tiling off\n";
         return 1;
