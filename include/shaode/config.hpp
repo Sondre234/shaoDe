@@ -90,6 +90,8 @@ struct Config {
     ScreenshotConfig screenshots;
     float opacity = 1, inactive_opacity = 1;
     std::vector<WindowRule> window_rules;
+    // GTK's button layout for client-decorated windows (Firefox's tab strip); empty: GTK's own.
+    std::string window_buttons = "appmenu:minimize,maximize,close";
 
     const Binding *binding(uint32_t modifiers, uint32_t keysym) const;
     // The first matching rule decides; otherwise the windows.opacity defaults.

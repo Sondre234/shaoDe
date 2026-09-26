@@ -73,6 +73,13 @@ int main(int argc, char **argv) {
                         .screenshots.directory == "/tmp/x",
                 "absolute screenshot directory not parsed");
         rejects("return {screenshots={directory='Shots'}}");
+        require(config.window_buttons == "appmenu:minimize,maximize,close",
+                "default window buttons changed");
+        require(shaode::parse_config("return {windows={buttons='close'}}").window_buttons ==
+                        "close" &&
+                    shaode::parse_config("return {windows={buttons=''}}").window_buttons.empty(),
+                "windows.buttons not parsed");
+        rejects("return {windows={buttons=\"close'\"}}");
         rejects("return {screenshots={directory=1}}");
         rejects("return {screenshots={clipboard='yes'}}");
         rejects("return {screenshots={format='jpeg'}}");

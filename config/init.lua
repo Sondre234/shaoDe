@@ -31,6 +31,10 @@ return {
         -- border_inactive_color = "#404a5c",
         -- opacity = 1.0,
         -- inactive_opacity = 1.0,
+        -- Buttons of windows that draw their own (Firefox's tab strip, GTK apps), in GTK's
+        -- button-layout format; "" keeps the desktop's setting. Applications started from
+        -- shaoDe see it; restart to change:
+        -- buttons = "appmenu:minimize,maximize,close",
         -- Per application, by app ID (a regular expression); the first match wins:
         -- rules = { { app_id = "^firefox$", opacity = 0.9, inactive_opacity = 0.85 } },
     },
