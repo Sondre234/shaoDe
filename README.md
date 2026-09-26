@@ -69,7 +69,7 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Super + V | Float or tile the focused window |
 | Super + F | Toggle fullscreen |
 | Super + T | Arrange the current output's windows in a grid (floating mode) |
-| Super + Shift + T | Turn automatic tiling on or off for the focused monitor |
+| Super + S | Turn automatic tiling on or off for the focused monitor |
 | Alt + Tab | Cycle windows |
 | Super + Left/Right/Up/Down | Focus the nearest window in that direction |
 | Super + Shift + arrows | Move the window that way, as Hyprland's `movewindow`: a tile trades places with its neighbour, a floating window goes to that edge; past the edge, on to the next monitor |
@@ -109,7 +109,7 @@ client's next buffer.
 ## Tiling
 
 Tiling is a setting of each monitor. The tiling button on a monitor's panel (next to the
-clock) switches that monitor between floating windows and automatic tiling; Super + Shift + T
+clock) switches that monitor between floating windows and automatic tiling; Super + S
 or `shaode msg toggle_tiling` switches the focused monitor, and
 `shaode msg output HDMI-A-1 toggle_tiling` a named one. Lua `layout.tiling = true` starts
 every monitor tiled, and `tiling` in a monitor's `outputs.monitors` entry overrides it:
