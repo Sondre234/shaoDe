@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
                 "move-to-workspace binding missing");
         require(config.settings.workspaces == 4, "example workspace count changed");
         require(!config.settings.tiling, "example starts tiled");
-        auto *toggle = config.binding(SH_LOGO | SH_SHIFT, XKB_KEY_T);
+        auto *toggle = config.binding(SH_LOGO, XKB_KEY_s);
         require(toggle && toggle->action == SH_TOGGLE_TILING, "tiling toggle binding missing");
         require(shaode::parse_config("return {layout={tiling=true}}").settings.tiling,
                 "layout.tiling not parsed");
