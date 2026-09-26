@@ -3,6 +3,7 @@
 #include "view.hpp"
 #include <QFile>
 #include <QGuiApplication>
+#include <QJSValue>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QQmlComponent>
@@ -253,6 +254,37 @@ int main(int argc, char **argv) {
         std::cerr << "the bar menu did not toggle tiling off\n";
         return 1;
     }
+    // Dragging a task along the bar moves it, not the whole list.
+    // ListModel.append takes JavaScript arguments, so it is reached through the engine.
+    QQmlEngine::setObjectOwnership(fakeModel, QQmlEngine::CppOwnership);
+    view.engine()
+        ->evaluate("(function(model) { model.append({ taskId: 8, title: 'Second', appId: 'fake', "
+                   "active: false, minimized: false }) })")
+        .call({view.engine()->newQObject(fakeModel)});
+    QQuickItem *second = nullptr;
+    if (!QTest::qWaitFor([&] {
+            QMetaObject::invokeMethod(tasks, "itemAtIndex", Q_RETURN_ARG(QQuickItem *, second),
+                                      Q_ARG(int, 1));
+            return second != nullptr;
+        }))
+        return 1;
+    auto firstTaskId = [&] {
+        QJSValue row;
+        QMetaObject::invokeMethod(fakeModel, "get", Q_RETURN_ARG(QJSValue, row), Q_ARG(int, 0));
+        return row.property("taskId").toInt();
+    };
+    const QPoint from = center(task), to = center(second) + QPoint(second->width() / 4, 0);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, from);
+    for (int step = 1; step <= 10; ++step) {
+        QTest::mouseMove(&view, from + (to - from) * step / 10);
+        QTest::qWait(10);
+    }
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, to);
+    if (!QTest::qWaitFor([&] { return firstTaskId() == 8; }) ||
+        tasks->property("contentX").toReal() != 0) {
+        std::cerr << "dragging a task did not reorder the task list\n";
+        return 1;
+    }
     std::cout << "Hover/click, launcher keyboard focus, search, command launch, tiling toggle, and "
-                 "workspace indicator, and task and bar context menus passed\n";
+                 "workspace indicator, task and bar context menus, and task reordering passed\n";
 }

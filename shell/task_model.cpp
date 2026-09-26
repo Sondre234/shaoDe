@@ -124,6 +124,20 @@ void TaskModel::showDesktop() {
         zwlr_foreign_toplevel_handle_v1_set_minimized(task->handle);
     flush();
 }
+void TaskModel::move(int from, int to, int count) {
+    int rows = rowCount();
+    if (count < 1 || from < 0 || to < 0 || from + count > rows || to + count > rows || from == to)
+        return;
+    // beginMoveRows wants the row the block lands in front of, counted before the move.
+    if (!beginMoveRows({}, from, from + count - 1, {}, to > from ? to + count : to))
+        return;
+    auto first = tasks_.begin() + from, last = first + count;
+    if (to > from)
+        std::rotate(first, last, last + (to - from));
+    else
+        std::rotate(tasks_.begin() + to, first, last);
+    endMoveRows();
+}
 void TaskModel::changed(Task *task) {
     for (int i = 0; i < rowCount(); ++i)
         if (tasks_[i].get() == task) {
