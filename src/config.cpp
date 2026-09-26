@@ -592,6 +592,10 @@ sh_action parse_action(const std::string &name) {
         {"focus_up", SH_FOCUS_UP},
         {"focus_down", SH_FOCUS_DOWN},
         {"screenshot", SH_SCREENSHOT},
+        {"move_left", SH_MOVE_LEFT},
+        {"move_right", SH_MOVE_RIGHT},
+        {"move_up", SH_MOVE_UP},
+        {"move_down", SH_MOVE_DOWN},
     };
     for (const auto &[candidate, action] : actions)
         if (name == candidate)

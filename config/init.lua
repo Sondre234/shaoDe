@@ -89,10 +89,11 @@ return {
         { mods = { mod }, key = "Right", action = "focus_right" },
         { mods = { mod }, key = "Up", action = "focus_up" },
         { mods = { mod }, key = "Down", action = "focus_down" },
-        { mods = { mod, "Shift" }, key = "Left", action = "snap_left" },
-        { mods = { mod, "Shift" }, key = "Right", action = "snap_right" },
-        { mods = { mod, "Shift" }, key = "Up", action = "maximize" },
-        { mods = { mod, "Shift" }, key = "Down", action = "restore" },
+        { mods = { mod, "Shift" }, key = "Left", action = "move_left" },
+        { mods = { mod, "Shift" }, key = "Right", action = "move_right" },
+        { mods = { mod, "Shift" }, key = "Up", action = "move_up" },
+        { mods = { mod, "Shift" }, key = "Down", action = "move_down" },
+        -- Also available: snap_left, snap_right (half the screen), maximize, restore.
         -- Lock with any ext-session-lock client, e.g.:
         -- { mods = { mod }, key = "l", action = "spawn", command = { "swaylock" } },
         { mods = { mod }, key = "1", action = "workspace", workspace = 1 },

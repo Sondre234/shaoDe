@@ -35,6 +35,12 @@ enum sh_action {
     SH_FOCUS_UP,
     SH_FOCUS_DOWN,
     SH_SCREENSHOT, /* argument: enum sh_screenshot_mode */
+    /* Hyprland's movewindow: a tile trades places with its neighbour, a floating window moves
+     * to the edge of its output, and either one moves on to the next output from there. */
+    SH_MOVE_LEFT,
+    SH_MOVE_RIGHT,
+    SH_MOVE_UP,
+    SH_MOVE_DOWN,
 };
 
 enum sh_screenshot_mode {
