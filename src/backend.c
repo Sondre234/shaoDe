@@ -2859,8 +2859,22 @@ static bool wants_tiling(struct sh_toplevel *toplevel, struct wlr_output *output
 /* Dialogs and fixed-size windows float, as in Hyprland. */
 static bool toplevel_is_dialog(struct sh_toplevel *toplevel) {
 #if WLR_HAS_XWAYLAND
-    if (toplevel->xsurface)
-        return toplevel->xsurface->parent || toplevel->xsurface->modal;
+    if (toplevel->xsurface) {
+        const struct wlr_xwayland_surface *xsurface = toplevel->xsurface;
+        const xcb_size_hints_t *hints = xsurface->size_hints;
+        enum wlr_xwayland_net_wm_window_type types[] = {WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DIALOG,
+                                                        WLR_XWAYLAND_NET_WM_WINDOW_TYPE_UTILITY,
+                                                        WLR_XWAYLAND_NET_WM_WINDOW_TYPE_SPLASH};
+        for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); ++i)
+            if (wlr_xwayland_surface_has_window_type(xsurface, types[i]))
+                return true;
+        // Like xdg-shell below: a window of one fixed size cannot fill a tile.
+        uint32_t fixed = XCB_ICCCM_SIZE_HINT_P_MIN_SIZE | XCB_ICCCM_SIZE_HINT_P_MAX_SIZE;
+        return xsurface->parent || xsurface->modal ||
+               (hints && (hints->flags & fixed) == fixed && hints->min_width > 0 &&
+                hints->min_width == hints->max_width && hints->min_height > 0 &&
+                hints->min_height == hints->max_height);
+    }
 #endif
     const struct wlr_xdg_toplevel_state *state = &toplevel->xdg_toplevel->current;
     return toplevel->xdg_toplevel->parent ||
