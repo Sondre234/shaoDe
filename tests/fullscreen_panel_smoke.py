@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Bars stay hidden over a fullscreen window, even after another window takes focus."""
+"""Bars stay hidden over a fullscreen window, even after another window takes focus, and a new
+window takes it out of fullscreen instead of opening over it."""
 import os
 from pathlib import Path
 import re
@@ -29,6 +30,12 @@ with tempfile.TemporaryDirectory(prefix="shaode-fullscreen-panel-test-") as dire
 
     def windows():
         return [line.split("\t") for line in msg("get", "windows").splitlines()]
+
+    def focused():
+        return next((i for i, row in enumerate(windows()) if row[1] == "1"), None)
+
+    def fullscreen():
+        return [i for i, row in enumerate(windows()) if row[6:8] == size]
 
     def panels():
         rows = [line.split("\t") for line in msg("get", "layers").splitlines()]
@@ -65,16 +72,20 @@ with tempfile.TemporaryDirectory(prefix="shaode-fullscreen-panel-test-") as dire
             _, _, _, _, width, height, *_ = msg("get", "outputs").split("\t")
             size = [width, height]
 
-            # Each probe reserves a test panel along the bottom and opens a window.
-            processes.append(subprocess.Popen([probe, "--external-control"], env=env,
-                                              stdout=subprocess.DEVNULL))
-            wait_for(lambda: len(windows()) == 1 and shown(), "first window and its panel")
-            msg("fullscreen")
-            wait_for(lambda: windows()[0][6:8] == size and hidden(), "fullscreen hid the panel")
+            def probe_window(count):
+                processes.append(subprocess.Popen([probe, "--external-control"], env=env,
+                                                  stdout=subprocess.DEVNULL))
+                wait_for(lambda: len(windows()) == count and focused() is not None and shown(), f"window {count} and its panel")
 
-            processes.append(subprocess.Popen([probe, "--external-control"], env=env,
-                                              stdout=subprocess.DEVNULL))
-            wait_for(lambda: len(windows()) == 2 and windows()[0][1] == "0", "second window")
+            # Each probe reserves a test panel along the bottom and opens a window.
+            probe_window(1)
+            probe_window(2)
+            msg("fullscreen")
+            wait_for(lambda: fullscreen() == [focused()] and hidden(), "fullscreen hid the panels")
+
+            msg("cycle")
+            wait_for(lambda: len(fullscreen()) == 1 and focused() not in fullscreen(),
+                     "focus on the other window")
             stays(hidden, "the panels came back over an unfocused fullscreen window")
 
             msg("workspace", "2")
@@ -82,16 +93,21 @@ with tempfile.TemporaryDirectory(prefix="shaode-fullscreen-panel-test-") as dire
             msg("workspace", "1")
             wait_for(hidden, "panels hidden again on the fullscreen window's workspace")
 
+            # A new window would open over it, so it leaves fullscreen instead.
+            probe_window(3)
+            assert not fullscreen(), windows()
+
             processes.pop().kill()
-            wait_for(lambda: len(windows()) == 1 and windows()[0][1] == "1" and hidden(),
-                     "focus back on the fullscreen window")
+            wait_for(lambda: len(windows()) == 2, "third window closed")
             msg("fullscreen")
-            wait_for(lambda: windows()[0][6:8] != size and shown(),
-                     "panel back after leaving fullscreen")
+            wait_for(lambda: len(fullscreen()) == 1 and hidden(), "fullscreen again")
+            msg("fullscreen")
+            wait_for(lambda: not fullscreen() and shown(),
+                     "panels back after leaving fullscreen")
 
             server.send_signal(signal.SIGTERM)
             assert server.wait(timeout=5) == 0, log.read_text()
-            print("Bars hidden over fullscreen windows, focused or not")
+            print("Bars hidden over fullscreen windows, focused or not; new windows end fullscreen")
         except Exception:
             print(log.read_text(), file=sys.stderr)
             raise

@@ -3264,6 +3264,17 @@ static bool initial_tile_size(struct sh_toplevel *toplevel, int *width, int *hei
     return true;
 }
 
+/* Takes the windows on the current workspace of `output`, other than `toplevel`, out of
+ * fullscreen. */
+static void leave_fullscreen_for(struct sh_toplevel *toplevel, struct wlr_output *output) {
+    struct sh_toplevel *other, *tmp;
+    wl_list_for_each_safe(other, tmp, &toplevel->server->toplevels, link) {
+        if (other != toplevel && other->fullscreen && toplevel_visible(other) &&
+            toplevel_output(other) == output)
+            set_fullscreen(other, false);
+    }
+}
+
 static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool maximized) {
     struct sh_server *server = toplevel->server;
     int offset = 40 + 32 * (wl_list_length(&toplevel->server->toplevels) % 8);
@@ -3299,6 +3310,10 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
 
     publish_toplevel(toplevel);
     toplevel->floating = toplevel_is_dialog(toplevel);
+    // A new window would open over a fullscreen one on its workspace, so that one leaves
+    // fullscreen first, as in Hyprland; dialogs belong to it and may show over it.
+    if (output && !fullscreen && !toplevel->floating)
+        leave_fullscreen_for(toplevel, output);
     struct sh_toplevel *target;
     struct wlr_output *tile_output = new_tile_split(toplevel, output, &target);
     if (wants_tiling(toplevel, tile_output)) {
