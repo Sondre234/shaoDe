@@ -189,6 +189,8 @@ struct Runtime {
     bool allow_shell = false;
     bool standalone = false;
     pid_t shell_pid = -1;
+    // The running screenshot script; another request is refused until it exits.
+    pid_t screenshot_pid = -1;
 
     void start_shell() {
 #if SHAODE_HAS_SHELL
@@ -209,6 +211,8 @@ struct Runtime {
             self.shell_pid = -1;
             std::cerr << "Desktop shell exited; reload the configuration to restart it\n";
         }
+        if (pid == self.screenshot_pid)
+            self.screenshot_pid = -1;
     }
 
     static const sh_settings *settings(void *data) {
@@ -280,6 +284,8 @@ struct Runtime {
                            const sh_rect *box, char *error, size_t error_size) {
         auto &self = *static_cast<Runtime *>(data);
         try {
+            if (self.screenshot_pid > 0)
+                throw std::runtime_error("a screenshot is already being taken");
             if (find_program("grim").empty() ||
                 (mode == SH_SCREENSHOT_REGION && find_program("slurp").empty()))
                 throw std::runtime_error(mode == SH_SCREENSHOT_REGION
@@ -311,8 +317,10 @@ struct Runtime {
                 target = std::to_string(box->x) + "," + std::to_string(box->y) + " " +
                          std::to_string(box->width) + "x" + std::to_string(box->height);
             static constexpr const char *modes[] = {"region", "output", "window"};
-            if (spawn({"/bin/sh", "-c", screenshot_script, "shaode-screenshot", file.string(),
-                       modes[mode], target, copy ? "1" : "0", notify ? "1" : "0"}) < 0)
+            self.screenshot_pid =
+                spawn({"/bin/sh", "-c", screenshot_script, "shaode-screenshot", file.string(),
+                       modes[mode], target, copy ? "1" : "0", notify ? "1" : "0"});
+            if (self.screenshot_pid < 0)
                 throw std::runtime_error("cannot start /bin/sh");
             return true;
         } catch (const std::exception &failure) {

@@ -15,7 +15,9 @@ compositor, probe, example = (str(Path(p).resolve()) for p in sys.argv[1:4])
 # are used, because the compositor's PATH holds nothing but these.
 TOOLS = {
     "grim": 'echo "grim $*" >> "$TOOL_LOG"; for last; do :; done; echo "fake png" > "$last"',
-    "slurp": 'echo "slurp" >> "$TOOL_LOG"; echo "10,20 30x40"',
+    # Waits, like a user choosing a region, until the test creates $TOOL_LOG.go.
+    "slurp": 'echo "slurp" >> "$TOOL_LOG"; while [ ! -e "$TOOL_LOG.go" ]; do :; done; '
+             'echo "10,20 30x40"',
     "wl-copy": 'IFS= read -r data; echo "wl-copy $* <$data>" >> "$TOOL_LOG"',
     "notify-send": 'echo "notify-send $*" >> "$TOOL_LOG"',
 }
@@ -97,11 +99,17 @@ with tempfile.TemporaryDirectory(prefix="shaode-screenshot-test-") as directory:
             (second,) = saved() - {first}
             assert calls()[0] == f"grim -g {x},{y} {width}x{height} {second}", calls()
 
-            # Screenshots within the same second get distinct names.
+            # Screenshots within the same second get distinct names. Each waits for the one
+            # before to be reaped, since a request while one is running is refused.
+            def screenshot_accepted(*words):
+                result = subprocess.run([compositor, "msg", "screenshot", *words], env=env,
+                                        capture_output=True, text=True, timeout=5)
+                assert result.returncode == 0 or "already" in result.stderr, result.stderr
+                return result.returncode == 0
             tool_log.write_text("")
             before = saved()
-            msg("screenshot", "output")
-            msg("screenshot", "output")
+            wait_for(lambda: screenshot_accepted("output"), processes, "first quick screenshot")
+            wait_for(lambda: screenshot_accepted("output"), processes, "second quick screenshot")
             wait_for(lambda: len(calls()) == 6, processes, "two quick screenshots", detail=calls)
             assert len(saved() - before) == 2, saved()
 
@@ -109,7 +117,12 @@ with tempfile.TemporaryDirectory(prefix="shaode-screenshot-test-") as directory:
             (tools / "wl-copy").unlink()
             tool_log.write_text("")
             before = saved()
-            msg("screenshot")
+            wait_for(lambda: screenshot_accepted(), processes, "region screenshot start")
+            wait_for(lambda: calls() == ["slurp"], processes, "slurp", detail=calls)
+            # Pressing Print again while choosing a region takes no second screenshot.
+            assert "already being taken" in msg("screenshot", ok=False)
+            assert "already being taken" in msg("screenshot", "output", ok=False)
+            Path(str(tool_log) + ".go").touch()
             wait_for(lambda: len(calls()) == 3, processes, "region screenshot", detail=calls)
             (region,) = saved() - before
             assert calls()[:2] == ["slurp", f"grim -g 10,20 30x40 {region}"], calls()
