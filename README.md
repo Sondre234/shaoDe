@@ -95,7 +95,7 @@ Dragging the pill around the dots, or the window's top edge (its top 6 pixels, a
 bar would), moves the window. Other windows decorate themselves.
 
 Dropping a dragged window with the pointer at the top edge of the screen, or on a panel along
-it, makes it fullscreen; dragging a fullscreen window away restores its earlier size. Hovering a
+it, maximizes it below the panels; dragging it away again restores its earlier size. Hovering a
 window focuses it without raising it (`mouse.focus_follows = false` turns this off), except
 while dragging, while a menu or popup is open, or while a panel or launcher has the keyboard.
 

@@ -350,6 +350,7 @@ struct sh_keyboard {
 
 static void arrange_layers(struct sh_server *server);
 static void arrange_windows(struct sh_server *server, enum sh_action action);
+static void place_by_hand(struct sh_toplevel *toplevel, enum sh_action action);
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges);
 static void create_popup(struct sh_server *server, struct wlr_xdg_popup *popup,
@@ -1421,11 +1422,16 @@ static bool dropped_at_top(struct sh_server *server) {
 }
 
 /* Dropping a window dragged out of the tiling splits the tile under the pointer; dropping one
- * at the top of the screen also makes it fullscreen. */
+ * at the top of the screen maximizes it instead, below the panels, like Super+Shift+Up. */
 static void finish_grab(struct sh_server *server) {
     struct sh_toplevel *toplevel = server->grabbed_toplevel;
-    bool fullscreen = toplevel && server->cursor_mode == SH_CURSOR_MOVE &&
-                      !server->grab_fullscreen && dropped_at_top(server);
+    bool maximize = toplevel && server->cursor_mode == SH_CURSOR_MOVE &&
+                    !server->grab_fullscreen && dropped_at_top(server);
+    if (maximize) {
+        server->grab_retile = false;
+        place_by_hand(toplevel, SH_MAXIMIZE);
+        return;
+    }
     struct wlr_output *output =
         wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
     // A window floating only because it was snapped or maximized joins the tiling of another
@@ -1438,8 +1444,6 @@ static void finish_grab(struct sh_server *server) {
     if (server->grab_retile && toplevel && wants_tiling(toplevel))
         tile_toplevel(toplevel, output, NULL, true);
     server->grab_retile = false;
-    if (fullscreen)
-        set_fullscreen(toplevel, true);
 }
 
 /* Pointer travel that turns a press on a fullscreen window into a drag out of fullscreen. */
@@ -2634,6 +2638,23 @@ static bool in_grid(struct sh_toplevel *toplevel, struct wlr_output *output) {
            toplevel_output(toplevel) == output;
 }
 
+/* Snaps or maximizes one window within the usable area of its output. A tiled window placed
+ * by hand floats from then on, or, lifted out by a drag, stays out of the tiling. */
+static void place_by_hand(struct sh_toplevel *toplevel, enum sh_action action) {
+    struct sh_server *server = toplevel->server;
+    if (toplevel->tiled || wants_tiling(toplevel))
+        toplevel->floating = toplevel->placed = true;
+    if (toplevel->tiled)
+        untile_toplevel(toplevel, false);
+    struct wlr_output *output = toplevel_output(toplevel);
+    if (!output)
+        return;
+    const struct sh_settings *settings = server_settings(server);
+    struct sh_rect area = gap_area(settings, usable_area(server, output), action), target;
+    if (sh_placement(action, area, settings->gap_inner, 0, 1, &target))
+        place_toplevel(toplevel, action, target);
+}
+
 static void arrange_windows(struct sh_server *server, enum sh_action action) {
     struct sh_toplevel *focused = current_toplevel(server);
     if (!focused)
@@ -2648,10 +2669,9 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
         restore_toplevel(focused);
         return;
     }
-    // A tiled window placed by hand floats from then on.
-    if (focused->tiled) {
-        focused->floating = focused->placed = true;
-        untile_toplevel(focused, false);
+    if (action != SH_TILE) {
+        place_by_hand(focused, action);
+        return;
     }
     struct wlr_output *output = toplevel_output(focused);
     if (!output)
@@ -2659,11 +2679,6 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     const struct sh_settings *settings = server_settings(server);
     struct sh_rect area = gap_area(settings, usable_area(server, output), action), target;
     int gap = settings->gap_inner;
-    if (action != SH_TILE) {
-        if (sh_placement(action, area, gap, 0, 1, &target))
-            place_toplevel(focused, action, target);
-        return;
-    }
     int count = 0, index = 0;
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) count += in_grid(toplevel, output);
