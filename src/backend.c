@@ -133,17 +133,19 @@ struct sh_server {
     struct wl_event_source *waker_timer, *waker_input;
 #endif
 #endif
-    /* Each output shows one of its own workspaces (from 0). Kept by output name, so an output
-     * that goes away (all of them do on a VT switch) comes back on the same workspace. */
+    /* Each output shows one of its own workspaces (from 0) and tiles automatically or not.
+     * Kept by output name, so an output that goes away (all of them do on a VT switch) comes
+     * back on the same workspace, tiling as it was. */
     struct {
         char name[64];
         int current;
+        int tiling;      // -1 until output_tiles decides it from the config
+        bool configured; // what the config said then, so a reload only applies changes
     } output_workspaces[16];
     char active_output[64];           // of the last focused window, switched workspace, or click
     char placed_primary[32];          // the primary output the pointer was last put on, if any
     struct wlr_output *target_output; // set while a control request names an output
     struct sh_tiling *tiling;
-    bool tiling_enabled;
     bool grab_retile;     // the grabbed window left the tiling to be moved; retile it on drop
     bool grab_fullscreen; // the grabbed window is fullscreen until it is dragged far enough
     struct wlr_output *grab_output; // where the grabbed window was when the grab began
@@ -367,18 +369,20 @@ static void request_launcher(struct sh_server *server);
 static void process_cursor_motion(struct sh_server *server, uint32_t time);
 static void refit_fullscreen(struct sh_server *server);
 static void rehome_tiles(struct sh_server *server);
+static void reconfigure_tiling(struct sh_server *server);
 static void reflow_output(struct sh_server *server, struct wlr_output *output);
 static void refresh_frame(struct sh_toplevel *toplevel);
 static void reload_config(struct sh_server *server);
 static void reset_cursor_mode(struct sh_server *server);
 static void set_fullscreen(struct sh_toplevel *toplevel, bool fullscreen);
-static void set_tiling(struct sh_server *server, bool enabled);
+static bool output_tiles(struct sh_server *server, struct wlr_output *output);
+static void set_tiling(struct sh_server *server, struct wlr_output *output, bool enabled);
 static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
                           struct sh_toplevel *target, bool at_cursor);
 static struct wlr_output *tiled_output(struct sh_toplevel *toplevel);
 static struct wlr_output *toplevel_output(struct sh_toplevel *toplevel);
 static void untile_toplevel(struct sh_toplevel *toplevel, bool restore);
-static bool wants_tiling(struct sh_toplevel *toplevel);
+static bool wants_tiling(struct sh_toplevel *toplevel, struct wlr_output *output);
 
 static const uint32_t ALL_EDGES = WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT;
 
@@ -547,13 +551,13 @@ static bool toplevel_accepts_keyboard(struct sh_toplevel *toplevel) {
 }
 
 /* The current workspace of the output named `name`, which need not be connected. */
-static int *output_workspace(struct sh_server *server, const char *name) {
+static int output_slot(struct sh_server *server, const char *name) {
     int count = sizeof(server->output_workspaces) / sizeof(server->output_workspaces[0]);
     int unused = -1, gone = -1;
     for (int i = 0; i < count; ++i) {
         const char *known = server->output_workspaces[i].name;
         if (!strcmp(known, name))
-            return &server->output_workspaces[i].current;
+            return i;
         if (!known[0] && unused < 0)
             unused = i;
         else if (known[0] && gone < 0 && !find_output(server, known))
@@ -563,7 +567,12 @@ static int *output_workspace(struct sh_server *server, const char *name) {
     snprintf(server->output_workspaces[slot].name, sizeof(server->output_workspaces[slot].name),
              "%s", name);
     server->output_workspaces[slot].current = 0;
-    return &server->output_workspaces[slot].current;
+    server->output_workspaces[slot].tiling = -1;
+    return slot;
+}
+
+static int *output_workspace(struct sh_server *server, const char *name) {
+    return &server->output_workspaces[output_slot(server, name)].current;
 }
 
 /* A window shows when its output shows its workspace. The output may be gone: its windows
@@ -678,7 +687,7 @@ static void focus_toplevel_raise(struct sh_toplevel *toplevel, bool raise) {
     server->focused_toplevel = toplevel;
     bool was_minimized = toplevel->minimized;
     toplevel->minimized = false;
-    if (was_minimized && wants_tiling(toplevel))
+    if (was_minimized && wants_tiling(toplevel, NULL))
         tile_toplevel(toplevel, NULL, NULL, false);
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
     // Panels stay reachable once a fullscreen window loses focus.
@@ -968,9 +977,11 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
         switch_workspace(server, output, (*output_workspace(server, output->name) + step) % count);
         break;
     }
-    case SH_TOGGLE_TILING:
-        set_tiling(server, !server->tiling_enabled);
+    case SH_TOGGLE_TILING: {
+        struct wlr_output *output = focused_output(server);
+        set_tiling(server, output, !output_tiles(server, output));
         break;
+    }
     case SH_LAUNCHER:
         request_launcher(server);
         break;
@@ -993,7 +1004,7 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
             untile_toplevel(current, true);
         } else if (current) {
             current->floating = false;
-            if (wants_tiling(current))
+            if (wants_tiling(current, NULL))
                 tile_toplevel(current, NULL, NULL, true);
         }
         break;
@@ -1459,14 +1470,16 @@ static void finish_grab(struct sh_server *server) {
     }
     struct wlr_output *output =
         wlr_output_layout_output_at(server->output_layout, server->cursor->x, server->cursor->y);
-    // A window floating only because it was snapped or maximized joins the tiling of another
-    // output it is dropped on; one floated on purpose stays floating.
-    if (toplevel && server->cursor_mode == SH_CURSOR_MOVE && toplevel->floating &&
-        toplevel->placed && output && output != server->grab_output && server->tiling_enabled) {
+    // A window floating only because it was snapped or maximized, or because its output does
+    // not tile, joins the tiling of another output it is dropped on; one floated on purpose
+    // stays floating. A tile dropped on an output that does not tile floats there.
+    if (toplevel && server->cursor_mode == SH_CURSOR_MOVE && !toplevel->tiled &&
+        (!toplevel->floating || toplevel->placed) && output && output != server->grab_output &&
+        output_tiles(server, output)) {
         toplevel->floating = toplevel->placed = false;
         server->grab_retile = true;
     }
-    if (server->grab_retile && toplevel && wants_tiling(toplevel))
+    if (server->grab_retile && toplevel && wants_tiling(toplevel, output))
         tile_toplevel(toplevel, output, NULL, true);
     server->grab_retile = false;
 }
@@ -2461,6 +2474,7 @@ static void reload_config(struct sh_server *server) {
     wl_list_for_each_safe(output, temporary, &server->outputs, link)
         configure_output(server, output);
     arrange_outputs(server);
+    reconfigure_tiling(server);
     rehome_tiles(server);
     int count = server_settings(server)->workspaces;
     struct sh_toplevel *toplevel;
@@ -2667,7 +2681,7 @@ static void place_by_hand(struct sh_toplevel *toplevel, enum sh_action action) {
     struct sh_server *server = toplevel->server;
     bool again = (action == SH_SNAP_LEFT || action == SH_SNAP_RIGHT) && toplevel->arranged &&
                  !toplevel->tiled && toplevel->arrangement == action;
-    if (toplevel->tiled || wants_tiling(toplevel))
+    if (toplevel->tiled || wants_tiling(toplevel, NULL))
         toplevel->floating = toplevel->placed = true;
     if (toplevel->tiled)
         untile_toplevel(toplevel, false);
@@ -2694,7 +2708,7 @@ static void arrange_windows(struct sh_server *server, enum sh_action action) {
     struct sh_toplevel *focused = current_toplevel(server);
     if (!focused)
         return;
-    if (action == SH_TILE && server->tiling_enabled)
+    if (action == SH_TILE && output_tiles(server, toplevel_output(focused)))
         return; // Already tiled automatically.
     if (focused->tiled && action == SH_RESTORE)
         return;
@@ -2783,9 +2797,37 @@ static struct wlr_output *tiled_output(struct sh_toplevel *toplevel) {
     return name ? find_output(toplevel->server, name) : NULL;
 }
 
-static bool wants_tiling(struct sh_toplevel *toplevel) {
-    return toplevel->server->tiling_enabled && !toplevel->tiled && !toplevel->floating &&
-           !toplevel->minimized;
+/* The tiling setting the config gives `output`: its own, else layout.tiling. */
+static bool configured_tiling(struct sh_server *server, struct wlr_output *output) {
+    const struct sh_settings *settings = server_settings(server);
+    const struct sh_monitor *monitor = monitor_settings(settings, output);
+    return monitor && monitor->tiling >= 0 ? monitor->tiling : settings->tiling;
+}
+
+/* Whether `output` tiles its windows automatically: as configured, until it is toggled. */
+static bool output_tiles(struct sh_server *server, struct wlr_output *output) {
+    if (!output)
+        return false;
+    int slot = output_slot(server, output->name);
+    if (server->output_workspaces[slot].tiling < 0) {
+        bool configured = configured_tiling(server, output);
+        server->output_workspaces[slot].tiling = configured;
+        server->output_workspaces[slot].configured = configured;
+    }
+    return server->output_workspaces[slot].tiling;
+}
+
+/* The output whose tiling an untiled window joins: the one it was placed on, else the one it
+ * is on. */
+static struct wlr_output *home_output(struct sh_toplevel *toplevel) {
+    struct wlr_output *output = find_output(toplevel->server, toplevel->output);
+    return output ? output : toplevel_output(toplevel);
+}
+
+/* Whether the window should join the tiling of `output` (by default its home output). */
+static bool wants_tiling(struct sh_toplevel *toplevel, struct wlr_output *output) {
+    return !toplevel->tiled && !toplevel->floating && !toplevel->minimized &&
+           output_tiles(toplevel->server, output ? output : home_output(toplevel));
 }
 
 /* Dialogs and fixed-size windows float, as in Hyprland. */
@@ -2806,9 +2848,7 @@ static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *outpu
                           struct sh_toplevel *target, bool at_cursor) {
     struct sh_server *server = toplevel->server;
     if (!output)
-        output = find_output(server, toplevel->output);
-    if (!output)
-        output = toplevel_output(toplevel);
+        output = home_output(toplevel);
     if (!output || toplevel->tiled)
         return;
     set_toplevel_output(toplevel, output);
@@ -2853,44 +2893,73 @@ static void untile_toplevel(struct sh_toplevel *toplevel, bool restore) {
         toplevel_set_states(toplevel, false, 0);
         toplevel_configure_box(toplevel, toplevel->restore_box);
     }
-    if (output && server->tiling_enabled)
+    if (output && output_tiles(server, output))
         reflow_output(server, output);
 }
 
 /* Tiles of an output disabled in the config join the tiling of the output they are nearest
- * now. Those of an unplugged output wait for it: monitors drop off when they sleep. */
+ * now, or float there if it does not tile; windows that floated only because their output did
+ * not tile join the tiling of one that does. Tiles of an unplugged output wait for it:
+ * monitors drop off when they sleep. */
 static void rehome_tiles(struct sh_server *server) {
     if (!first_output(server))
         return;
     bool moved = false;
     struct sh_toplevel *toplevel;
     wl_list_for_each_reverse(toplevel, &server->toplevels, link) {
-        if (!toplevel->tiled || tiled_output(toplevel))
-            continue;
-        untile_toplevel(toplevel, false);
-        tile_toplevel(toplevel, NULL, NULL, false);
-        moved = true;
+        if (toplevel->tiled && !tiled_output(toplevel)) {
+            untile_toplevel(toplevel, false);
+            if (wants_tiling(toplevel, NULL))
+                tile_toplevel(toplevel, NULL, NULL, false);
+            else
+                restore_toplevel(toplevel);
+            moved = true;
+        } else if (toplevel != server->grabbed_toplevel && toplevel_mapped(toplevel) &&
+                   wants_tiling(toplevel, NULL)) {
+            tile_toplevel(toplevel, NULL, NULL, false);
+            moved = true;
+        }
     }
     if (moved)
         refit_fullscreen(server); // Fullscreen tiles follow to their new output.
 }
 
-static void set_tiling(struct sh_server *server, bool enabled) {
-    if (server->tiling_enabled == enabled)
+/* Turns automatic tiling of `output` on or off, for the windows on all its workspaces. */
+static void set_tiling(struct sh_server *server, struct wlr_output *output, bool enabled) {
+    if (!output || output_tiles(server, output) == enabled)
         return;
-    server->tiling_enabled = enabled;
-    // Most recently focused first, so the focused window gets the largest tile.
+    server->output_workspaces[output_slot(server, output->name)].tiling = enabled;
+    // Most recently focused first, so the focused window gets the largest tile. Tiles of an
+    // unplugged output are left waiting for it.
     struct sh_toplevel *toplevel;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (enabled && wants_tiling(toplevel))
-            tile_toplevel(toplevel, NULL, NULL, false);
+        if (toplevel->tiled ? tiled_output(toplevel) != output : home_output(toplevel) != output)
+            continue;
+        if (enabled && wants_tiling(toplevel, output))
+            tile_toplevel(toplevel, output, NULL, false);
         else if (!enabled && toplevel->tiled)
             untile_toplevel(toplevel, true);
         else if (!enabled && toplevel->arranged && toplevel->arrangement == SH_NONE)
             restore_toplevel(toplevel); // left the tiling while minimized
     }
-    wlr_log(WLR_INFO, "Tiling %s", enabled ? "on" : "off");
+    wlr_log(WLR_INFO, "Tiling %s on %s", enabled ? "on" : "off", output->name);
     notify_subscribers(server);
+}
+
+/* A reload applies tiling settings that changed in the config; outputs toggled since keep
+ * their state while the config for them stays the same. */
+static void reconfigure_tiling(struct sh_server *server) {
+    struct sh_output *output;
+    wl_list_for_each(output, &server->outputs, link) {
+        int slot = output_slot(server, output->wlr_output->name);
+        if (server->output_workspaces[slot].tiling < 0)
+            continue;
+        bool configured = configured_tiling(server, output->wlr_output);
+        if (configured == server->output_workspaces[slot].configured)
+            continue;
+        server->output_workspaces[slot].configured = configured;
+        set_tiling(server, output->wlr_output, configured);
+    }
 }
 
 static void foreign_activate(struct wl_listener *listener, void *data) {
@@ -3177,12 +3246,11 @@ static struct wlr_output *new_tile_split(struct sh_toplevel *toplevel, struct wl
  * again at the tile's size. */
 static bool initial_tile_size(struct sh_toplevel *toplevel, int *width, int *height) {
     struct sh_server *server = toplevel->server;
-    if (!server->tiling_enabled || toplevel->xdg_toplevel->requested.fullscreen ||
-        toplevel_is_dialog(toplevel))
+    if (toplevel->xdg_toplevel->requested.fullscreen || toplevel_is_dialog(toplevel))
         return false;
     struct sh_toplevel *target;
     struct wlr_output *output = new_tile_split(toplevel, new_window_output(toplevel), &target);
-    if (!output)
+    if (!output_tiles(server, output))
         return false;
     const struct sh_settings *settings = server_settings(server);
     struct sh_rect area = gap_area(settings, usable_area(server, output), SH_TILE), rect;
@@ -3231,9 +3299,9 @@ static void map_toplevel(struct sh_toplevel *toplevel, bool fullscreen, bool max
 
     publish_toplevel(toplevel);
     toplevel->floating = toplevel_is_dialog(toplevel);
-    if (wants_tiling(toplevel)) {
-        struct sh_toplevel *target;
-        struct wlr_output *tile_output = new_tile_split(toplevel, output, &target);
+    struct sh_toplevel *target;
+    struct wlr_output *tile_output = new_tile_split(toplevel, output, &target);
+    if (wants_tiling(toplevel, tile_output)) {
         tile_toplevel(toplevel, tile_output, target, true);
     } else if (toplevel->tile_sized) {
         toplevel->tile_sized = false; // It floats after all: let the client choose its size.
@@ -4070,19 +4138,21 @@ static void control_handle(struct sh_server *server, int fd, const char *request
         control_reply(fd, "ok\n");
         struct wlr_output *focused = focused_output(server);
         struct sh_output *output;
-        // name, current workspace, focused, workspaces with windows — one line per output.
+        // name, current workspace, focused, workspaces with windows, tiling — one line per
+        // output.
         wl_list_for_each_reverse(output, &server->outputs, link) {
             char line[256], used[128];
             occupied_workspaces(server, output->wlr_output, used, sizeof(used));
-            snprintf(line, sizeof(line), "%s\t%d\t%d\t%s\n", output->wlr_output->name,
+            snprintf(line, sizeof(line), "%s\t%d\t%d\t%s\t%s\n", output->wlr_output->name,
                      *output_workspace(server, output->wlr_output->name) + 1,
-                     output->wlr_output == focused, used);
+                     output->wlr_output == focused, used,
+                     output_tiles(server, output->wlr_output) ? "on" : "off");
             control_reply(fd, line);
         }
         return;
     }
     if (!strcmp(request, "get tiling")) {
-        control_reply(fd, server->tiling_enabled ? "ok\non\n" : "ok\noff\n");
+        control_reply(fd, output_tiles(server, focused_output(server)) ? "ok\non\n" : "ok\noff\n");
         return;
     }
     if (!strcmp(request, "get windows")) {
@@ -4158,20 +4228,22 @@ static void control_client_close(struct sh_control_client *client) {
     free(client);
 }
 
-/* The state subscribers get: "tiling on|off", "workspace N" for the focused output, and
- * "output NAME N USED" for each output, with its current workspace and those holding windows
- * ("1,3", or "-"). */
+/* The state subscribers get: "tiling on|off" and "workspace N" for the focused output, and
+ * "output NAME N USED TILING" for each output, with its current workspace, those holding
+ * windows ("1,3", or "-"), and whether it tiles ("on" or "off"). */
 static void describe_state(struct sh_server *server, char *state, size_t size) {
     size_t length = snprintf(state, size, "tiling %s\nworkspace %d\n",
-                             server->tiling_enabled ? "on" : "off", focused_workspace(server));
+                             output_tiles(server, focused_output(server)) ? "on" : "off",
+                             focused_workspace(server));
     struct sh_output *output;
     wl_list_for_each_reverse(output, &server->outputs, link) {
         char used[128];
         occupied_workspaces(server, output->wlr_output, used, sizeof(used));
         if (length < size)
-            length += snprintf(state + length, size - length, "output %s %d %s\n",
+            length += snprintf(state + length, size - length, "output %s %d %s %s\n",
                                output->wlr_output->name,
-                               *output_workspace(server, output->wlr_output->name) + 1, used);
+                               *output_workspace(server, output->wlr_output->name) + 1, used,
+                               output_tiles(server, output->wlr_output) ? "on" : "off");
     }
 }
 
@@ -4358,7 +4430,6 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     server.tiling = sh_tiling_create();
     if (!server.tiling)
         return 1;
-    server.tiling_enabled = server_settings(&server)->tiling;
 
     server.wl_display = wl_display_create();
     if (!server.wl_display)

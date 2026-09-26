@@ -23,7 +23,8 @@ return {
     layout = {
         -- gap = 8, -- sets both; or gap_inner (between windows) and gap_outer (at the edges)
         workspaces = 4,
-        tiling = false, -- start with automatic tiling; the panel button toggles it
+        tiling = false, -- automatic tiling on every monitor; outputs.monitors can override it,
+        -- and each monitor's panel button toggles it there
     },
     windows = {
         -- border_width = 0, -- drawn around each window; tiles shrink to keep it in their slot
@@ -44,9 +45,9 @@ return {
         -- Left to right by connector name; unlisted monitors follow on the right.
         order = { "HDMI-A-1", "DP-3", "DP-1" },
         primary = "DP-3", -- the cursor starts here; without it, the leftmost monitor
-        -- Per-monitor mode, scale, position, rotation (0-7), vrr, or enabled = false, keyed
-        -- by connector or by "desc:" and the start of "make model serial", e.g.:
-        -- monitors = { ["DP-3"] = { mode = "2560x1440@200", scale = 1.25 } },
+        -- Per-monitor mode, scale, position, rotation (0-7), vrr, tiling, or enabled = false,
+        -- keyed by connector or by "desc:" and the start of "make model serial", e.g.:
+        -- monitors = { ["DP-3"] = { mode = "2560x1440@200", scale = 1.25, tiling = true } },
     },
     screenshots = {
         -- Saved as Screenshot_<date>_<time>.png; "~/" means your home directory. Empty or unset:

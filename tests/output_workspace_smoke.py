@@ -79,8 +79,8 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-workspace-test-") as dire
 
             # Both outputs start on workspace 1.
             assert workspaces() == {"HEADLESS-1": (1, True, "-"), "HEADLESS-2": (1, False, "-")}
-            wait_for(lambda: streamed("output HEADLESS-2 1 -"), processes, "initial state")
-            assert "output HEADLESS-1 1 -" in "".join(received)
+            wait_for(lambda: streamed("output HEADLESS-2 1 - on"), processes, "initial state")
+            assert "output HEADLESS-1 1 - on" in "".join(received)
             assert "no such output" in msg("output", "BOGUS-1", "workspace", "2", ok=False)
             assert "needs a name" in msg("output", "HEADLESS-1", ok=False)
 
@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-workspace-test-") as dire
             processes.append(first)
             wait_for(lambda: windows() == [(1, "HEADLESS-1", True)], processes,
                      "first window on HEADLESS-1", detail=windows)
-            wait_for(lambda: streamed("output HEADLESS-1 1 1"), processes, "occupied stream")
+            wait_for(lambda: streamed("output HEADLESS-1 1 1 on"), processes, "occupied stream")
 
             config.write_text(CONFIG % "HEADLESS-2")
             server.send_signal(signal.SIGHUP)
@@ -106,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-output-workspace-test-") as dire
             msg("output", "HEADLESS-1", "workspace", "2")
             assert current() == {"HEADLESS-1": 2, "HEADLESS-2": 1}
             assert windows() == [(1, "HEADLESS-1", False), (1, "HEADLESS-2", True)], windows()
-            wait_for(lambda: streamed("output HEADLESS-1 2 1"), processes, "switch stream")
+            wait_for(lambda: streamed("output HEADLESS-1 2 1 on"), processes, "switch stream")
             assert msg("get", "workspace") == "1\n", "reported another output's workspace"
 
             # Without a named output, actions switch the focused one.

@@ -59,6 +59,7 @@ struct sh_monitor {
     int x, y;
     int transform; /* enum wl_output_transform, which Hyprland's numbering matches */
     bool vrr;      /* adaptive sync, where the monitor supports it */
+    int tiling;    /* automatic tiling: -1 follows sh_settings.tiling, else 0 or 1 */
 };
 
 struct sh_settings {
@@ -71,7 +72,7 @@ struct sh_settings {
     char keyboard_layout[128];
     char keyboard_options[128];
     bool xwayland; /* read at startup; changing it needs a restart */
-    bool tiling;   /* automatic tiling at startup; toggled at runtime afterwards */
+    bool tiling;   /* automatic tiling on outputs without their own; toggled per output */
     int workspaces;
     /* Outputs named here sit left to right in this order; others follow as they appear.
      * The primary output (or the leftmost, if unnamed) sits at the layout origin. */

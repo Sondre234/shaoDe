@@ -132,6 +132,18 @@ int main(int argc, char **argv) {
                     described.settings.monitors[0].vrr,
                 "description key or vrr not parsed");
         rejects("return {outputs={monitors={X={vrr='on'}}}}");
+        auto tiled =
+            shaode::parse_config("return {layout={tiling=true},"
+                                 "outputs={monitors={A={tiling=false},B={tiling=true},C={}}}}");
+        require(tiled.settings.tiling && tiled.settings.monitor_count == 3,
+                "per-monitor tiling not parsed");
+        for (int i = 0; i < 3; ++i) {
+            const auto &m = tiled.settings.monitors[i];
+            int expected = std::string(m.name) == "A" ? 0 : std::string(m.name) == "B" ? 1 : -1;
+            require(m.tiling == expected, "per-monitor tiling mixed up");
+        }
+        require(plain.settings.monitors[0].tiling == -1, "monitor tiling should follow layout");
+        rejects("return {outputs={monitors={X={tiling='yes'}}}}");
         require(shaode::parse_action("workspace_next") == SH_WORKSPACE_NEXT,
                 "control action names differ from Lua");
         rejects("return {bindings={{mods={'Alt'},key='1',action='workspace'}}}");

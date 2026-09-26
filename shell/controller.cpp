@@ -184,16 +184,18 @@ void ShellController::subscribe() {
                 outputs = true;
             } else if (line.startsWith("output ")) {
                 outputs = true;
-                // output NAME CURRENT OCCUPIED, where OCCUPIED is "1,3" or "-".
+                // output NAME CURRENT OCCUPIED TILING, where OCCUPIED is "1,3" or "-" and
+                // TILING is "on" or "off".
                 const auto words = line.split(' ');
-                if (words.size() != 4)
+                if (words.size() != 5)
                     continue;
                 QVariantList occupied;
                 for (const auto &number : words[3].split(',', Qt::SkipEmptyParts))
                     if (number != "-")
                         occupied.push_back(number.toInt());
-                nextWorkspaces_[words[1]] =
-                    QVariantMap{{"current", words[2].toInt()}, {"occupied", occupied}};
+                nextWorkspaces_[words[1]] = QVariantMap{{"current", words[2].toInt()},
+                                                        {"occupied", occupied},
+                                                        {"tiling", words[4] == "on"}};
                 continue;
             } else if (line.startsWith("launcher ")) {
                 Q_EMIT launcherRequested(line.sliced(9));
@@ -213,8 +215,10 @@ void ShellController::subscribe() {
     });
     state_->connectToServer(path);
 }
-void ShellController::toggleTiling() {
-    request("toggle_tiling\n", "Tiling needs a running shaoDe session.");
+void ShellController::toggleTiling(const QString &output) {
+    request(output.isEmpty() ? QByteArray("toggle_tiling\n")
+                             : QString("output %1 toggle_tiling\n").arg(output).toUtf8(),
+            "Tiling needs a running shaoDe session.");
 }
 void ShellController::showWorkspace(const QString &output, int number) {
     if (!output.isEmpty() && number >= 1 && number <= workspaceCount())
