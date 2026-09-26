@@ -101,12 +101,23 @@ struct sh_settings {
     int animation_duration;   /* milliseconds */
 };
 
+/* What a mouse button was pressed over. */
+enum sh_pointer_target {
+    SH_POINTER_WINDOW,
+    SH_POINTER_DESKTOP, /* no window, panel, or other surface but the wallpaper */
+    SH_POINTER_OTHER,   /* a panel, bar, or other layer surface */
+};
+
 struct sh_rect;
 struct sh_callbacks {
     void *userdata;
     const struct sh_settings *(*settings)(void *);
     /* Returns the bound action; *argument receives its numeric argument, if any. */
     enum sh_action (*key)(void *, uint32_t modifiers, uint32_t keysym, int *argument);
+    /* The same for a pressed mouse button (a Linux BTN_* code) over `target`; `app_id` is the
+     * window's, or "". SH_NONE leaves the click to the application. */
+    enum sh_action (*button)(void *, uint32_t modifiers, uint32_t button,
+                             enum sh_pointer_target target, const char *app_id, int *argument);
     /* Parses a control-socket request into an action; SH_NONE with a message on error. */
     enum sh_action (*command)(void *, const char *request, int *argument, char *error,
                               size_t error_size);

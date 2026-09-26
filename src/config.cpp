@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <linux/input-event-codes.h>
 #include <lua.hpp>
 #include <memory>
 #include <stdexcept>
@@ -144,6 +145,16 @@ uint32_t modifier(const std::string &name) {
         if (name == candidate)
             return bit;
     fail("unknown modifier '" + name + "'");
+}
+// Linux's names; most mice send side and extra from their back and forward thumb buttons
+// (Hyprland's mouse:275 and mouse:276).
+uint32_t mouse_button(const std::string &name) {
+    for (auto [candidate, code] :
+         {std::pair{"left", BTN_LEFT}, {"right", BTN_RIGHT}, {"middle", BTN_MIDDLE},
+          {"side", BTN_SIDE}, {"extra", BTN_EXTRA}, {"forward", BTN_FORWARD}, {"back", BTN_BACK}})
+        if (name == candidate)
+            return code;
+    fail("unknown button '" + name + "'");
 }
 Command command(lua_State *L) {
     auto size = array_size(L, -1, 256);
@@ -485,17 +496,47 @@ Config read(lua_State *L, size_t own = SIZE_MAX) {
         for (size_t i = 1; i <= size; ++i) {
             lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
             table(L, -1, "binding");
-            keys(L, -1, {"mods", "key", "action", "command", "workspace", "mode"});
+            keys(L, -1,
+                 {"mods", "key", "button", "app_id", "desktop", "action", "command", "workspace",
+                  "mode"});
             Binding binding{};
-            auto key = field(L, "key");
-            binding.keysym =
-                xkb_keysym_to_lower(xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_NO_FLAGS));
-            if (binding.keysym == XKB_KEY_NoSymbol)
-                fail("unknown key '" + key + "'");
+            lua_getfield(L, -1, "button");
+            bool is_button = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+            if (is_button) {
+                lua_getfield(L, -1, "key");
+                if (!lua_isnil(L, -1))
+                    fail("a binding takes a key or a button, not both");
+                lua_pop(L, 1);
+                binding.button = mouse_button(field(L, "button"));
+                lua_getfield(L, -1, "app_id");
+                if (!lua_isnil(L, -1)) {
+                    binding.app_id = string(L, -1, "app_id");
+                    try {
+                        binding.pattern = std::regex(binding.app_id, std::regex::ECMAScript);
+                    } catch (const std::regex_error &) {
+                        fail("app_id '" + binding.app_id + "' is not a valid regular expression");
+                    }
+                }
+                lua_pop(L, 1);
+                boolean(L, "desktop", "desktop", binding.desktop);
+            } else {
+                for (const char *only : {"app_id", "desktop"}) {
+                    lua_getfield(L, -1, only);
+                    if (!lua_isnil(L, -1))
+                        fail(std::string(only) + " is only valid with a button");
+                    lua_pop(L, 1);
+                }
+                auto key = field(L, "key");
+                binding.keysym =
+                    xkb_keysym_to_lower(xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_NO_FLAGS));
+                if (binding.keysym == XKB_KEY_NoSymbol)
+                    fail("unknown key '" + key + "'");
+            }
             auto action = field(L, "action");
             binding.action = action == "none" ? SH_NONE : parse_action(action);
             lua_getfield(L, -1, "mods");
-            auto mods = array_size(L, -1, 4);
+            auto mods = lua_isnil(L, -1) ? 0 : array_size(L, -1, 4);
             for (size_t j = 1; j <= mods; ++j) {
                 lua_rawgeti(L, -1, static_cast<lua_Integer>(j));
                 auto bit = modifier(string(L, -1, "modifier"));
@@ -530,7 +571,8 @@ Config read(lua_State *L, size_t own = SIZE_MAX) {
             lua_pop(L, 1);
             // Bindings past `own` come from the defaults a configuration extends; its own
             // bindings, "none" included, take their keys first.
-            if (!config.binding(binding.modifiers, binding.keysym))
+            // Button bindings may share a button: the first whose target matches wins.
+            if (binding.button || !config.binding(binding.modifiers, binding.keysym))
                 config.bindings.push_back(std::move(binding));
             else if (i <= own)
                 fail("duplicate keyboard binding");
@@ -539,7 +581,10 @@ Config read(lua_State *L, size_t own = SIZE_MAX) {
     }
     lua_pop(L, 1);
     std::erase_if(config.bindings,
-                  [](const Binding &binding) { return binding.action == SH_NONE; });
+                  [](const Binding &binding) {
+                      // A button's "none" stays: it hands matching clicks to the application.
+                      return binding.action == SH_NONE && !binding.button;
+                  });
     lua_getfield(L, -1, "startup");
     if (!lua_isnil(L, -1)) {
         auto size = array_size(L, -1, 32);
@@ -628,8 +673,24 @@ const Binding *Config::binding(uint32_t modifiers, uint32_t keysym) const {
     modifiers &= relevant; // CapsLock and NumLock do not disable shortcuts.
     keysym = xkb_keysym_to_lower(keysym);
     for (const auto &binding : bindings)
-        if (binding.modifiers == modifiers && binding.keysym == keysym)
+        if (!binding.button && binding.modifiers == modifiers && binding.keysym == keysym)
             return &binding;
+    return nullptr;
+}
+
+const Binding *Config::button_binding(uint32_t modifiers, uint32_t button,
+                                      sh_pointer_target target, const std::string &app_id) const {
+    constexpr uint32_t relevant = SH_SHIFT | SH_CTRL | SH_ALT | SH_LOGO;
+    modifiers &= relevant;
+    for (const auto &binding : bindings) {
+        if (!binding.button || binding.button != button || binding.modifiers != modifiers)
+            continue;
+        bool anywhere = !binding.pattern && !binding.desktop;
+        if (anywhere || (binding.desktop && target == SH_POINTER_DESKTOP) ||
+            (binding.pattern && target == SH_POINTER_WINDOW &&
+             std::regex_search(app_id, *binding.pattern)))
+            return binding.action == SH_NONE ? nullptr : &binding;
+    }
     return nullptr;
 }
 

@@ -76,6 +76,13 @@ return {
     },
     startup = {}, -- e.g. { { "kitty" } }
     bindings = {
+        -- Mouse buttons bind too: left, right, middle, side, extra (most mice's back and
+        -- forward thumb buttons), forward, back. app_id (a regular expression) limits one to
+        -- windows under the pointer, desktop = true to the bare desktop; elsewhere the click
+        -- reaches the application, so a browser keeps its own back and forward:
+        -- { button = "side", app_id = "^kitty$", desktop = true, action = "close" },
+        -- { button = "extra", app_id = "^kitty$", desktop = true, action = "spawn",
+        --   command = { "kitty" } },
         { mods = { mod }, key = "q", action = "spawn", command = { "kitty" } },
         { mods = { mod }, key = "r", action = "launcher" },
         { mods = { mod }, key = "c", action = "close" },

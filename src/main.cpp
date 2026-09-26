@@ -231,6 +231,17 @@ struct Runtime {
         *argument = binding->action == SH_SCREENSHOT ? binding->screenshot : binding->workspace;
         return binding->action;
     }
+    static sh_action button(void *data, uint32_t modifiers, uint32_t button,
+                            sh_pointer_target target, const char *app_id, int *argument) {
+        auto &self = *static_cast<Runtime *>(data);
+        auto *binding = self.config.button_binding(modifiers, button, target, app_id);
+        if (!binding)
+            return SH_NONE;
+        if (binding->action == SH_HANDLED)
+            spawn(binding->command);
+        *argument = binding->action == SH_SCREENSHOT ? binding->screenshot : binding->workspace;
+        return binding->action;
+    }
     /* Control requests: "<action> [workspace]", "screenshot [region|output|window]", or
      * "spawn PROGRAM [ARGS...]". */
     static sh_action command(void *data, const char *request, int *argument, char *error,
@@ -546,9 +557,9 @@ int main(int argc, char **argv) {
             throw std::runtime_error("start --session from a TTY or a display manager, outside an "
                                      "existing graphical session");
         const sh_callbacks callbacks{
-            &runtime,           Runtime::settings, Runtime::key,          Runtime::command,
-            Runtime::reload,    Runtime::startup,  Runtime::child_exited, Runtime::opacity,
-            Runtime::screenshot};
+            &runtime,           Runtime::settings, Runtime::key,          Runtime::button,
+            Runtime::command,   Runtime::reload,   Runtime::startup,      Runtime::child_exited,
+            Runtime::opacity,   Runtime::screenshot};
         int result = sh_run(&callbacks, mode);
         if (runtime.shell_pid > 0)
             kill(runtime.shell_pid, SIGTERM);

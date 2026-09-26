@@ -118,6 +118,7 @@ struct sh_server {
     const struct sh_callbacks *callbacks;
     bool running;
     uint32_t grab_button;
+    uint32_t bound_buttons; /* bit (code - BTN_MOUSE): pressed buttons a binding consumed */
     struct wlr_scene_tree *backgrounds;
     struct wlr_scene_tree *windows;
     struct wlr_scene_tree *fullscreen;
@@ -1872,6 +1873,75 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
     process_cursor_motion(server, event->time_msec);
 }
 
+/* Actions that work on the focused window; over the bare desktop, a button binding skips them
+ * rather than act on a window the pointer is not on. */
+static bool action_targets_window(enum sh_action action) {
+    switch (action) {
+    case SH_CLOSE:
+    case SH_FULLSCREEN:
+    case SH_TOGGLE_FLOATING:
+    case SH_MOVE_TO_WORKSPACE:
+    case SH_SNAP_LEFT:
+    case SH_SNAP_RIGHT:
+    case SH_MAXIMIZE:
+    case SH_RESTORE:
+    case SH_MOVE_LEFT:
+    case SH_MOVE_RIGHT:
+    case SH_MOVE_UP:
+    case SH_MOVE_DOWN:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Runs the binding for a pressed button, if one matches what lies under the pointer, and
+ * swallows both the press and its release. Returns false when the click belongs to a client. */
+static bool handle_button_binding(struct sh_server *server,
+                                  const struct wlr_pointer_button_event *event) {
+    if (event->button < BTN_MOUSE || event->button >= BTN_MOUSE + 32)
+        return false;
+    uint32_t bit = 1u << (event->button - BTN_MOUSE);
+    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        if (!(server->bound_buttons & bit))
+            return false;
+        server->bound_buttons &= ~bit;
+        return true;
+    }
+    if (server->locked || server->grab_button || server->deco_pressed)
+        return false;
+    double sx, sy;
+    struct wlr_surface *surface = NULL;
+    struct sh_node *node =
+        desktop_node_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+    struct sh_toplevel *toplevel = NULL;
+    enum sh_pointer_target target = SH_POINTER_DESKTOP;
+    if (node && node->kind == SH_NODE_TOPLEVEL) {
+        toplevel = node->owner;
+        target = SH_POINTER_WINDOW;
+    } else if (node && node->kind == SH_NODE_LAYER) {
+        struct sh_layer *layer = node->owner;
+        if (layer->surface->current.layer != ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
+            target = SH_POINTER_OTHER;
+    } else if (surface) {
+        target = SH_POINTER_OTHER; // a popup, or an unmanaged X11 window
+    }
+    const char *app_id = toplevel ? toplevel_app_id(toplevel) : NULL;
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
+    uint32_t mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+    int argument = 0;
+    enum sh_action action = server->callbacks->button(
+        server->callbacks->userdata, mods, event->button, target, app_id ? app_id : "", &argument);
+    if (action == SH_NONE)
+        return false;
+    server->bound_buttons |= bit;
+    if (toplevel)
+        focus_toplevel(toplevel);
+    if (toplevel || !action_targets_window(action))
+        run_action(server, action, argument);
+    return true;
+}
+
 static void server_cursor_button(struct wl_listener *listener, void *data) {
     struct sh_server *server = wl_container_of(listener, server, cursor_button);
     struct wlr_pointer_button_event *event = data;
@@ -1895,6 +1965,8 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         process_cursor_motion(server, event->time_msec);
         return;
     }
+    if (handle_button_binding(server, event))
+        return;
     enum sh_deco_part part;
     struct sh_toplevel *decorated =
         event->state == WL_POINTER_BUTTON_STATE_PRESSED && !server->locked && !server->deco_pressed
