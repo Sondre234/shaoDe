@@ -312,7 +312,7 @@ void read_monitors(lua_State *L, sh_settings &settings) {
 void read_windows(lua_State *L, Config &config) {
     if (!section(L, "windows",
                  {"border_width", "border_color", "border_inactive_color", "opacity",
-                  "inactive_opacity", "rules"})) {
+                  "inactive_opacity", "rules", "buttons"})) {
         lua_pop(L, 1);
         return;
     }
@@ -327,6 +327,14 @@ void read_windows(lua_State *L, Config &config) {
     config.opacity = static_cast<float>(number(L, "opacity", 1, 0.05, 1));
     config.inactive_opacity =
         static_cast<float>(number(L, "inactive_opacity", config.opacity, 0.05, 1));
+    lua_getfield(L, -1, "buttons");
+    if (!lua_isnil(L, -1)) {
+        config.window_buttons = string(L, -1, "windows.buttons");
+        if (config.window_buttons.find_first_not_of("abcdefghijklmnopqrstuvwxyz_,:") !=
+            std::string::npos)
+            fail("windows.buttons must look like \"appmenu:minimize,maximize,close\"");
+    }
+    lua_pop(L, 1);
     lua_getfield(L, -1, "rules");
     if (!lua_isnil(L, -1)) {
         auto size = array_size(L, -1, 256);

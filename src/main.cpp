@@ -71,6 +71,63 @@ void export_activation_environment() {
     if (pid > 0)
         std::cerr << "dbus-update-activation-environment is still running; not waiting\n";
 }
+/* The dconf profile our children would read without us: $DCONF_PROFILE or "user", looked up
+ * the way dconf does. Without a profile file, dconf reads just the user database. */
+std::string dconf_profile() {
+    const char *name = std::getenv("DCONF_PROFILE");
+    std::string profile = name && *name ? name : "user";
+    std::vector<std::filesystem::path> candidates;
+    if (profile.starts_with('/')) {
+        candidates.emplace_back(profile);
+    } else {
+        candidates.push_back(std::filesystem::path("/etc/dconf/profile") / profile);
+        const char *data = std::getenv("XDG_DATA_DIRS");
+        std::istringstream directories(data && *data ? data : "/usr/local/share:/usr/share");
+        for (std::string directory; std::getline(directories, directory, ':');)
+            if (!directory.empty())
+                candidates.push_back(std::filesystem::path(directory) / "dconf/profile" / profile);
+    }
+    for (const auto &candidate : candidates) {
+        std::ifstream file(candidate);
+        if (!file)
+            continue;
+        std::string text{std::istreambuf_iterator<char>(file), {}};
+        if (!text.empty() && text.back() != '\n')
+            text += '\n';
+        return text;
+    }
+    return "user-db:user\n";
+}
+/* GTK draws the buttons of client-decorated windows, Firefox's tab strip among them, from
+ * org.gnome.desktop.wm.preferences button-layout. Desktops without title bar buttons (HyDE on
+ * Hyprland) set it empty, which leaves such windows with no buttons at all. Our children get a
+ * dconf profile that adds a database locking that one key to `layout`; every other setting
+ * still reads from and writes to the user's own database, and other sessions see no change. */
+void set_window_buttons(const std::string &layout) {
+    const char *runtime = std::getenv("XDG_RUNTIME_DIR");
+    const char *display = std::getenv("WAYLAND_DISPLAY");
+    if (layout.empty() || !runtime || *runtime != '/' || !display || !*display)
+        return;
+    auto directory = std::filesystem::path(runtime) / ("shaode." + std::string(display) + ".dconf");
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    std::filesystem::create_directories(directory / "keyfiles/locks", error);
+    std::ofstream(directory / "keyfiles/shaode")
+        << "[org/gnome/desktop/wm/preferences]\nbutton-layout='" << layout << "'\n";
+    std::ofstream(directory / "keyfiles/locks/shaode")
+        << "/org/gnome/desktop/wm/preferences/button-layout\n";
+    auto database = directory / "buttons";
+    pid_t pid = spawn({"dconf", "compile", database.string(), (directory / "keyfiles").string()});
+    int status = 0;
+    if (pid <= 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        std::cerr << "Cannot set GTK window buttons: dconf compile failed\n";
+        return;
+    }
+    auto profile = directory / "profile";
+    std::ofstream(profile) << dconf_profile() << "file-db:" << database.string() << '\n';
+    setenv("DCONF_PROFILE", profile.c_str(), true);
+}
 // The executable `name` on PATH, or an empty path.
 std::filesystem::path find_program(const std::string &name) {
     const char *path = std::getenv("PATH");
@@ -283,6 +340,7 @@ struct Runtime {
         auto &self = *static_cast<Runtime *>(data);
         if (self.standalone)
             export_activation_environment();
+        set_window_buttons(self.config.window_buttons);
         self.start_shell();
         for (const auto &command : self.config.startup)
             spawn(command);

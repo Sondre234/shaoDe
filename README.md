@@ -259,6 +259,14 @@ xdg-activation lets an application raise itself, so a link clicked in a chat bri
 browser forward; shaoDe honours every valid token and does not prevent focus stealing.
 Popup menus are kept on the output of their window.
 
+Firefox and GTK applications draw their own minimize, maximize, and close buttons, laid
+out by GTK's `button-layout` setting, which desktops without title bar buttons (HyDE on
+Hyprland, for one) leave empty. shaoDe gives the applications it starts a dconf profile
+(`DCONF_PROFILE`) that locks that one setting to `windows.buttons`, by default
+`"appmenu:minimize,maximize,close"`; `""` keeps the desktop's value. Every other GTK
+setting still comes from, and is saved to, your own dconf database, so other sessions
+see no change. This needs `dconf` at startup.
+
 The `screenshot` action (Print, or `shaode msg screenshot region|output|window`) runs
 [`grim`](https://sr.ht/~emersion/grim/), with [`slurp`](https://github.com/emersion/slurp)
 to select a region, and saves `Screenshot_<date>_<time>.png` in `$XDG_PICTURES_DIR/Screenshots`
