@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -365,11 +366,11 @@ void instruction_limit(lua_State *L, lua_Debug *) {
     if (--*remaining <= 0)
         luaL_error(L, "configuration exceeded its instruction budget");
 }
-Config read(lua_State *L) {
+Config read(lua_State *L, size_t own = SIZE_MAX) {
     Config config;
     table(L, -1, "configuration result");
     keys(L, -1,
-         {"version", "theme", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs",
+         {"version", "extends", "theme", "appearance", "keyboard", "mouse", "touchpad", "layout", "outputs",
           "windows", "animations", "bindings", "startup", "shell", "xwayland", "screenshots"});
     read_shell(L, config.shell);
     if (integer(L, "version", 1, 1, 1) != 1)
@@ -491,7 +492,8 @@ Config read(lua_State *L) {
                 xkb_keysym_to_lower(xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_NO_FLAGS));
             if (binding.keysym == XKB_KEY_NoSymbol)
                 fail("unknown key '" + key + "'");
-            binding.action = parse_action(field(L, "action"));
+            auto action = field(L, "action");
+            binding.action = action == "none" ? SH_NONE : parse_action(action);
             lua_getfield(L, -1, "mods");
             auto mods = array_size(L, -1, 4);
             for (size_t j = 1; j <= mods; ++j) {
@@ -526,13 +528,18 @@ Config read(lua_State *L) {
                 binding.screenshot = parse_screenshot_mode(string(L, -1, "mode"));
             }
             lua_pop(L, 1);
-            if (config.binding(binding.modifiers, binding.keysym))
+            // Bindings past `own` come from the defaults a configuration extends; its own
+            // bindings, "none" included, take their keys first.
+            if (!config.binding(binding.modifiers, binding.keysym))
+                config.bindings.push_back(std::move(binding));
+            else if (i <= own)
                 fail("duplicate keyboard binding");
-            config.bindings.push_back(std::move(binding));
             lua_pop(L, 1);
         }
     }
     lua_pop(L, 1);
+    std::erase_if(config.bindings,
+                  [](const Binding &binding) { return binding.action == SH_NONE; });
     lua_getfield(L, -1, "startup");
     if (!lua_isnil(L, -1)) {
         auto size = array_size(L, -1, 32);
@@ -721,6 +728,50 @@ void include_theme(lua_State *L, const std::filesystem::path &directory) {
     merge(L, -2, -1);
     lua_pop(L, 1);
 }
+// `extends = "default"` layers the configuration, theme included, over the shipped default
+// configuration: every setting it leaves out comes from there, its bindings go first, and the
+// defaults fill in the keys it does not bind. Returns how many bindings are its own.
+size_t include_defaults(lua_State *L) {
+    lua_getfield(L, -1, "extends");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return SIZE_MAX;
+    }
+    if (string(L, -1, "extends") != "default")
+        fail("extends must be \"default\"");
+    lua_pop(L, 1);
+    const auto *variable = std::getenv("SHAODE_DEFAULT_CONFIG");
+    std::filesystem::path path = variable && *variable ? variable : SHAODE_DEFAULT_CONFIG;
+    evaluate(L, read_file(path), "@" + path.string());
+    table(L, -1, "default configuration result");
+    lua_getfield(L, -1, "extends");
+    if (!lua_isnil(L, -1))
+        fail("the default configuration cannot extend another");
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_setfield(L, -2, "theme");
+    lua_getfield(L, -2, "bindings");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -4, "bindings");
+    }
+    table(L, -1, "bindings");
+    size_t own = lua_rawlen(L, -1);
+    lua_getfield(L, -2, "bindings");
+    if (!lua_isnil(L, -1)) {
+        table(L, -1, "default bindings");
+        for (lua_Integer i = 1; i <= static_cast<lua_Integer>(lua_rawlen(L, -1)); ++i) {
+            lua_rawgeti(L, -1, i);
+            lua_rawseti(L, -3, static_cast<lua_Integer>(own) + i);
+        }
+    }
+    lua_pop(L, 2);
+    merge(L, -2, -1);
+    lua_pop(L, 1);
+    return own;
+}
 void shadowed(lua_State *L, int config, int theme, const std::string &prefix,
               std::vector<std::string> &result) {
     config = lua_absindex(L, config);
@@ -748,7 +799,8 @@ Config parse_config(const std::string &source, const std::string &name,
     auto *L = state.get();
     evaluate(L, source, name);
     include_theme(L, directory);
-    return read(L);
+    auto own = include_defaults(L);
+    return read(L, own);
 }
 
 Config load_config(const std::filesystem::path &path) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaode/config.hpp"
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -261,6 +262,32 @@ int main(int argc, char **argv) {
         rejects("local b={mods={'Alt'},key='a',action='quit'}; return {bindings={b,b}}");
         rejects("while true do end");
         rejects("os.execute('false')");
+        // A configuration extending the defaults holds only its changes.
+        setenv("SHAODE_DEFAULT_CONFIG", argv[1], 1);
+        auto bare = shaode::parse_config("return {extends='default'}");
+        require(bare.bindings.size() == 31 && bare.shell.launchers.size() == 2 &&
+                    bare.settings.workspaces == 4,
+                "extends did not supply the defaults");
+        auto layered = shaode::parse_config(
+            "return {extends='default', layout={gap=3}, bindings={"
+            "{mods={'Super'}, key='v', action='none'},"
+            "{mods={'Super'}, key='q', action='spawn', command={'foot'}},"
+            "{mods={'Super'}, key='e', action='spawn', command={'dolphin'}}}}");
+        require(layered.settings.gap_inner == 3 && layered.settings.workspaces == 4,
+                "extending configuration settings not layered over the defaults");
+        require(layered.bindings.size() == 31 && !layered.binding(SH_LOGO, XKB_KEY_v),
+                "action none did not remove a default binding");
+        require(layered.binding(SH_LOGO, XKB_KEY_q)->command == shaode::Command{"foot"} &&
+                    layered.binding(SH_LOGO, XKB_KEY_e)->command == shaode::Command{"dolphin"},
+                "own bindings did not take their keys from the defaults");
+        require(layered.binding(SH_LOGO, XKB_KEY_s)->action == SH_TOGGLE_TILING,
+                "untouched default binding missing");
+        require(shaode::parse_config("return {bindings={{mods={}, key='a', action='none'}}}")
+                    .bindings.empty(),
+                "action none left a binding");
+        rejects("return {extends='other'}");
+        rejects("local b={mods={'Alt'},key='a',action='quit'}; "
+                "return {extends='default', bindings={b,b}}");
         // Failed reload leaves the previously active value intact.
         try {
             config = shaode::parse_config("return {layout={gap=999}}");

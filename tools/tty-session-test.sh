@@ -6,7 +6,8 @@
 #
 # Usage: tty-session-test.sh [-n | --fresh] [-p | --profile NAME]
 # A profile is a directory in ~/.config/shaode/profiles holding an init.lua (and usually the
-# theme.lua `shaode import` wrote beside it). With neither option, a menu picks a profile or a
+# theme.lua `shaode import` wrote beside it); one with `extends = "default"` layers over this
+# tree's config/init.lua. With neither option, a menu picks a profile or a
 # fresh session; Enter takes the one used last. --fresh runs the example configuration from
 # this tree alone, as a first install sees it.
 set -eu
@@ -90,6 +91,7 @@ else
 fi
 sleep 2
 
+export SHAODE_DEFAULT_CONFIG="$repo/config/init.lua"
 rc=0
 dbus-run-session -- "$@" \
     "$bin" --config "$config" --session --exec "$term" >>"$log" 2>&1 || rc=$?
