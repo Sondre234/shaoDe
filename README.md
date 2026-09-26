@@ -340,7 +340,23 @@ return {
 ```
 
 Its bindings take their keys first and the defaults fill in the rest; `action = "none"`
-leaves a key unbound. Other lists, such as `startup` or `shell.launchers`, replace the
+leaves a key unbound.
+
+Bindings can use a mouse button (`left`, `right`, `middle`, `side`, `extra`, `forward`,
+`back`; most mice send `side` and `extra` from their back and forward thumb buttons) in place
+of `key`, with or without `mods`. `app_id`, a regular expression, limits one to windows under
+the pointer whose app ID matches, and `desktop = true` to the bare desktop; with neither it
+acts anywhere. Everywhere else the click reaches the application as usual. Several bindings may
+share a button, and the first that matches wins (`action = "none"` hands the click back).
+Close, fullscreen, and other window actions act on the window under the pointer, and do nothing
+over the desktop. This closes terminals and opens new ones from the thumb buttons, while
+browsers keep their own back and forward:
+
+```lua
+{ button = "side", app_id = "^(kitty|foot)$", desktop = true, action = "close" },
+{ button = "extra", app_id = "^(kitty|foot)$", desktop = true, action = "spawn",
+  command = { "kitty" } },
+``` Other lists, such as `startup` or `shell.launchers`, replace the
 default list whole.
 
 CTest covers configuration validation, grid and dwindle layout bounds/non-overlap,

@@ -13,7 +13,14 @@ using Command = std::vector<std::string>;
 
 struct Binding {
     uint32_t modifiers;
-    uint32_t keysym;
+    uint32_t keysym; // 0 for a mouse button binding
+    uint32_t button = 0; // a Linux BTN_* code; 0 for a key binding
+    // A button binding acts only over a window whose app ID matches `app_id` (an ECMAScript
+    // regex, searched) or, with `desktop`, over the bare desktop; with neither, anywhere.
+    // Elsewhere the click reaches the application under the pointer.
+    std::string app_id;
+    std::optional<std::regex> pattern;
+    bool desktop = false;
     sh_action action;
     Command command;
     int workspace = 0; // for workspace and move_to_workspace, from 1
@@ -94,6 +101,10 @@ struct Config {
     std::string window_buttons = "appmenu:minimize,maximize,close";
 
     const Binding *binding(uint32_t modifiers, uint32_t keysym) const;
+    // The first button binding for what lies under the pointer, or nothing (the click belongs
+    // to the application, as does one whose first match is action = "none").
+    const Binding *button_binding(uint32_t modifiers, uint32_t button, sh_pointer_target target,
+                                  const std::string &app_id) const;
     // The first matching rule decides; otherwise the windows.opacity defaults.
     float window_opacity(const std::string &app_id, bool active) const;
 };

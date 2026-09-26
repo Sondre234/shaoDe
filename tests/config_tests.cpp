@@ -290,6 +290,39 @@ int main(int argc, char **argv) {
         rejects("return {extends='other'}");
         rejects("local b={mods={'Alt'},key='a',action='quit'}; "
                 "return {extends='default', bindings={b,b}}");
+        auto buttons = shaode::parse_config(
+            "return {bindings={"
+            "{button='side', app_id='^kitty$', desktop=true, action='close'},"
+            "{button='extra', app_id='^kitty$', action='spawn', command={'kitty'}},"
+            "{button='extra', desktop=true, action='spawn', command={'foot'}},"
+            "{button='middle', app_id='^firefox$', action='none'},"
+            "{button='middle', action='fullscreen'},"
+            "{mods={'Super'}, button='left', action='quit'}}}");
+        require(buttons.bindings.size() == 6, "button bindings missing");
+        require(buttons.button_binding(0, 0x113, SH_POINTER_WINDOW, "kitty")->action == SH_CLOSE &&
+                    buttons.button_binding(0, 0x113, SH_POINTER_DESKTOP, "")->action == SH_CLOSE,
+                "side button binding did not match a terminal or the desktop");
+        require(!buttons.button_binding(0, 0x113, SH_POINTER_WINDOW, "firefox") &&
+                    !buttons.button_binding(0, 0x113, SH_POINTER_OTHER, "") &&
+                    !buttons.button_binding(SH_LOGO, 0x113, SH_POINTER_WINDOW, "kitty"),
+                "side button binding took another window's, a panel's, or a modified click");
+        require(buttons.button_binding(0, 0x114, SH_POINTER_WINDOW, "kitty")->command ==
+                        shaode::Command{"kitty"} &&
+                    buttons.button_binding(0, 0x114, SH_POINTER_DESKTOP, "")->command ==
+                        shaode::Command{"foot"},
+                "bindings sharing a button did not match in order");
+        require(!buttons.button_binding(0, 0x112, SH_POINTER_WINDOW, "firefox") &&
+                    buttons.button_binding(0, 0x112, SH_POINTER_OTHER, "")->action ==
+                        SH_FULLSCREEN,
+                "button action none or an unconditional button binding misbehaved");
+        require(buttons.button_binding(SH_LOGO, 0x110, SH_POINTER_WINDOW, "x")->action == SH_QUIT &&
+                    !buttons.binding(0, 0),
+                "modified button binding missing, or a button matched as a key");
+        rejects("return {bindings={{button='wheel', action='close'}}}");
+        rejects("return {bindings={{button='side', key='a', action='close'}}}");
+        rejects("return {bindings={{key='a', app_id='x', action='close'}}}");
+        rejects("return {bindings={{key='a', desktop=true, action='close'}}}");
+        rejects("return {bindings={{button='side', app_id='(', action='close'}}}");
         // Failed reload leaves the previously active value intact.
         try {
             config = shaode::parse_config("return {layout={gap=999}}");
