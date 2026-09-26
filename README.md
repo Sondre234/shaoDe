@@ -72,8 +72,7 @@ Default bindings (edit [config/init.lua](config/init.lua)):
 | Super + Shift + T | Turn automatic tiling on or off for the focused monitor |
 | Alt + Tab | Cycle windows |
 | Super + Left/Right/Up/Down | Focus the nearest window in that direction |
-| Super + Shift + Left/Right | Snap to half the output; again to move to the next monitor |
-| Super + Shift + Up/Down | Maximize / restore saved floating geometry |
+| Super + Shift + arrows | Move the window that way, as Hyprland's `movewindow`: a tile trades places with its neighbour, a floating window goes to that edge; past the edge, on to the next monitor |
 | Super + 1–4 | Switch to workspace 1–4 |
 | Super + Shift + 1–4 | Move the focused window to workspace 1–4 |
 | Super + Ctrl + Left/Right | Previous / next workspace |

@@ -45,6 +45,8 @@ int main(int argc, char **argv) {
                 "layout.tiling not parsed");
         auto *focus = config.binding(SH_LOGO, XKB_KEY_Left);
         require(focus && focus->action == SH_FOCUS_LEFT, "directional focus binding missing");
+        auto *move_window = config.binding(SH_LOGO | SH_SHIFT, XKB_KEY_Right);
+        require(move_window && move_window->action == SH_MOVE_RIGHT, "move-window binding missing");
         auto *launcher = config.binding(SH_LOGO, XKB_KEY_r);
         require(launcher && launcher->action == SH_LAUNCHER, "launcher binding missing");
         require(shaode::parse_action("toggle_floating") == SH_TOGGLE_FLOATING,

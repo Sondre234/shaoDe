@@ -357,6 +357,7 @@ struct sh_keyboard {
 static void arrange_layers(struct sh_server *server);
 static void arrange_windows(struct sh_server *server, enum sh_action action);
 static void place_by_hand(struct sh_toplevel *toplevel, enum sh_action action);
+static void move_window(struct sh_server *server, enum sh_action action);
 static void begin_interactive(struct sh_toplevel *toplevel, enum sh_cursor_mode mode,
                               uint32_t edges);
 static void create_popup(struct sh_server *server, struct wlr_xdg_popup *popup,
@@ -856,21 +857,23 @@ static void move_to_workspace(struct sh_server *server, int workspace) {
     }
 }
 
-/* The nearest visible window from the focused one in a direction: first those level with
- * it (overlapping across the direction), then by distance between centres. */
-static void focus_direction(struct sh_server *server, enum sh_action action) {
-    struct sh_toplevel *current = current_toplevel(server);
-    if (!current || server->locked)
-        return;
-    bool horizontal = action == SH_FOCUS_LEFT || action == SH_FOCUS_RIGHT;
-    int sign = action == SH_FOCUS_LEFT || action == SH_FOCUS_UP ? -1 : 1;
-    struct wlr_box from = toplevel_box(current);
+/* The nearest visible window from `from` in a direction (`sign` -1 is left or up): first those
+ * level with it (overlapping across the direction), then by distance between centres.
+ * `tiles_only` looks only at tiles sharing its tiling. */
+static struct sh_toplevel *toplevel_toward(struct sh_toplevel *from_toplevel, bool horizontal,
+                                           int sign, bool tiles_only) {
+    struct sh_server *server = from_toplevel->server;
+    struct wlr_output *tiling = tiles_only ? tiled_output(from_toplevel) : NULL;
+    struct wlr_box from = toplevel_box(from_toplevel);
     double from_x = from.x + from.width / 2.0, from_y = from.y + from.height / 2.0;
     struct sh_toplevel *best = NULL, *toplevel;
     bool best_level = false;
     double best_distance = 0;
     wl_list_for_each(toplevel, &server->toplevels, link) {
-        if (toplevel == current || !toplevel_visible(toplevel))
+        if (toplevel == from_toplevel || !toplevel_visible(toplevel))
+            continue;
+        if (tiles_only && (!toplevel->tiled || toplevel->fullscreen ||
+                           tiled_output(toplevel) != tiling))
             continue;
         struct wlr_box box = toplevel_box(toplevel);
         double x = box.x + box.width / 2.0, y = box.y + box.height / 2.0;
@@ -886,20 +889,37 @@ static void focus_direction(struct sh_server *server, enum sh_action action) {
             best_distance = distance;
         }
     }
+    return best;
+}
+
+/* Focus follows the mouse on its next move, so keyboard actions take the pointer along to the
+ * window they focus or move. Windows still opening or gliding are not yet drawn where they
+ * are, so they land first; otherwise the pointer could hover, and focus, whichever window is
+ * passing its destination. */
+static void pointer_follow(struct sh_toplevel *toplevel) {
+    struct sh_server *server = toplevel->server;
+    if (!server_settings(server)->focus_follows_mouse)
+        return;
+    struct sh_toplevel *other;
+    wl_list_for_each(other, &server->toplevels, link) sh_anim_finish(&other->anim);
+    struct wlr_box box = toplevel_box(toplevel);
+    wlr_cursor_warp(server->cursor, NULL, box.x + box.width / 2.0, box.y + box.height / 2.0);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    process_cursor_motion(server, now.tv_sec * 1000 + now.tv_nsec / 1000000);
+}
+
+static void focus_direction(struct sh_server *server, enum sh_action action) {
+    struct sh_toplevel *current = current_toplevel(server);
+    if (!current || server->locked)
+        return;
+    bool horizontal = action == SH_FOCUS_LEFT || action == SH_FOCUS_RIGHT;
+    int sign = action == SH_FOCUS_LEFT || action == SH_FOCUS_UP ? -1 : 1;
+    struct sh_toplevel *best = toplevel_toward(current, horizontal, sign, false);
     if (!best)
         return;
     focus_toplevel(best);
-    // Focus follows the mouse on its next move, so take the pointer along. Windows still
-    // opening or gliding are not yet drawn where they are, so they land first; otherwise the
-    // pointer could hover, and focus, whichever window is passing its destination.
-    if (server_settings(server)->focus_follows_mouse) {
-        wl_list_for_each(toplevel, &server->toplevels, link) sh_anim_finish(&toplevel->anim);
-        struct wlr_box box = toplevel_box(best);
-        wlr_cursor_warp(server->cursor, NULL, box.x + box.width / 2.0, box.y + box.height / 2.0);
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        process_cursor_motion(server, now.tv_sec * 1000 + now.tv_nsec / 1000000);
-    }
+    pointer_follow(best);
 }
 
 /* Hands the output under the pointer or the focused window's box to the configuration side, which
@@ -990,6 +1010,12 @@ static void run_action(struct sh_server *server, enum sh_action action, int argu
     case SH_FOCUS_UP:
     case SH_FOCUS_DOWN:
         focus_direction(server, action);
+        break;
+    case SH_MOVE_LEFT:
+    case SH_MOVE_RIGHT:
+    case SH_MOVE_UP:
+    case SH_MOVE_DOWN:
+        move_window(server, action);
         break;
     case SH_SCREENSHOT: {
         char error[256] = "";
@@ -2843,9 +2869,9 @@ static bool toplevel_is_dialog(struct sh_toplevel *toplevel) {
 }
 
 /* Adds a window to the tiling of `output` (by default the one it is on), splitting `target`
- * when that is tiled there, else the tile under the pointer with `at_cursor`. */
-static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
-                          struct sh_toplevel *target, bool at_cursor) {
+ * when that is tiled there, else the tile under the point x, y with `has_point`. */
+static void tile_toplevel_at(struct sh_toplevel *toplevel, struct wlr_output *output,
+                             struct sh_toplevel *target, bool has_point, double x, double y) {
     struct sh_server *server = toplevel->server;
     if (!output)
         output = home_output(toplevel);
@@ -2862,9 +2888,16 @@ static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *outpu
     toplevel->tiled = true;
     if (toplevel->foreign)
         wlr_foreign_toplevel_handle_v1_set_maximized(toplevel->foreign, false);
-    sh_tiling_insert(server->tiling, output->name, toplevel->workspace, toplevel, target, at_cursor,
-                     server->cursor->x, server->cursor->y);
+    sh_tiling_insert(server->tiling, output->name, toplevel->workspace, toplevel, target, has_point,
+                     x, y);
     reflow_output(server, output);
+}
+
+/* As tile_toplevel_at, at the tile under the pointer with `at_cursor`. */
+static void tile_toplevel(struct sh_toplevel *toplevel, struct wlr_output *output,
+                          struct sh_toplevel *target, bool at_cursor) {
+    struct wlr_cursor *cursor = toplevel->server->cursor;
+    tile_toplevel_at(toplevel, output, target, at_cursor, cursor->x, cursor->y);
 }
 
 /* Takes a window out of the tiling. `restore` returns it to its floating geometry; otherwise
@@ -2944,6 +2977,158 @@ static void set_tiling(struct sh_server *server, struct wlr_output *output, bool
     }
     wlr_log(WLR_INFO, "Tiling %s on %s", enabled ? "on" : "off", output->name);
     notify_subscribers(server);
+}
+
+/* The rectangle a tile got in the last arrangement. */
+struct tile_lookup {
+    void *window;
+    struct sh_rect rect;
+    bool found;
+};
+static void find_tile(void *data, void *window, struct sh_rect rect) {
+    struct tile_lookup *lookup = data;
+    if (window == lookup->window) {
+        lookup->rect = rect;
+        lookup->found = true;
+    }
+}
+
+/* Moves a tile to the far side of `neighbour`, as Hyprland's dwindle layout does: out of the
+ * tiling, then in again splitting the neighbour on the side away from where it came from. */
+static void move_tile(struct sh_toplevel *toplevel, struct sh_toplevel *neighbour,
+                      struct wlr_output *output, bool horizontal, int sign) {
+    struct sh_server *server = toplevel->server;
+    const struct sh_settings *settings = server_settings(server);
+    struct sh_rect area = gap_area(settings, usable_area(server, output), SH_TILE);
+    struct tile_lookup lookup = {neighbour, {0}, false};
+    sh_tiling_remove(server->tiling, toplevel);
+    // Arranging without the window gives the neighbour the box it is split from.
+    sh_tiling_arrange(server->tiling, output->name, toplevel->workspace, area, settings->gap_inner,
+                      find_tile, &lookup);
+    struct sh_rect r = lookup.rect;
+    double x = r.x + r.width / 2.0, y = r.y + r.height / 2.0;
+    if (horizontal)
+        x = sign < 0 ? r.x : r.x + r.width - 1;
+    else
+        y = sign < 0 ? r.y : r.y + r.height - 1;
+    sh_tiling_insert(server->tiling, output->name, toplevel->workspace, toplevel,
+                     lookup.found ? neighbour : NULL, lookup.found, x, y);
+    reflow_output(server, output);
+}
+
+/* The usable area of `output` less the outer gap and the window border: where a floating
+ * window moved by the keyboard may go. */
+static struct sh_rect floating_area(struct sh_server *server, struct wlr_output *output) {
+    int gap = server_settings(server)->gap_outer;
+    struct sh_rect area = usable_area(server, output);
+    area = (struct sh_rect){area.x + gap, area.y + gap, area.width - 2 * gap,
+                            area.height - 2 * gap};
+    return inside_border(server, area);
+}
+
+/* `box` placed against the side of `area` facing the direction, kept inside `area` across
+ * it. */
+static struct wlr_box against_edge(struct wlr_box box, struct sh_rect area, bool horizontal,
+                                   int sign) {
+    int x = sign < 0 ? area.x : fmax(area.x, area.x + area.width - box.width);
+    int y = sign < 0 ? area.y : fmax(area.y, area.y + area.height - box.height);
+    if (horizontal) {
+        box.x = x;
+        box.y = fmax(area.y, fmin(box.y, area.y + area.height - box.height));
+    } else {
+        box.y = y;
+        box.x = fmax(area.x, fmin(box.x, area.x + area.width - box.width));
+    }
+    return box;
+}
+
+/* A snapped or grid-arranged window leaves its arrangement to be moved: it gets its floating
+ * size back where it is. */
+static void unarrange_in_place(struct sh_toplevel *toplevel) {
+    if (!toplevel->arranged)
+        return;
+    struct wlr_box box = toplevel_box(toplevel);
+    if (toplevel->restore_box.width > 0 && toplevel->restore_box.height > 0) {
+        box.width = toplevel->restore_box.width;
+        box.height = toplevel->restore_box.height;
+    }
+    toplevel->arranged = false;
+    toplevel_set_states(toplevel, false, 0);
+    toplevel_configure_box(toplevel, box);
+}
+
+/* Moves the window over to `next`, onto the side facing where it came from: into its tiling
+ * when the window tiles there, else floating against that edge. A maximized window stays
+ * maximized. */
+static void move_to_output(struct sh_toplevel *toplevel, struct wlr_output *next, bool horizontal,
+                           int sign) {
+    struct sh_server *server = toplevel->server;
+    struct sh_rect area = usable_area(server, next);
+    struct wlr_box box = toplevel_box(toplevel);
+    untile_toplevel(toplevel, false);
+    if (wants_tiling(toplevel, next)) {
+        double x = fmax(area.x, fmin(box.x + box.width / 2.0, area.x + area.width - 1));
+        double y = fmax(area.y, fmin(box.y + box.height / 2.0, area.y + area.height - 1));
+        if (horizontal)
+            x = sign < 0 ? area.x + area.width - 1 : area.x;
+        else
+            y = sign < 0 ? area.y + area.height - 1 : area.y;
+        tile_toplevel_at(toplevel, next, NULL, true, x, y);
+        return;
+    }
+    if (toplevel->arranged && toplevel->arrangement == SH_MAXIMIZE) {
+        place_toplevel(toplevel, SH_MAXIMIZE, area);
+        return;
+    }
+    unarrange_in_place(toplevel);
+    box = rebase_box(server, toplevel_box(toplevel), next);
+    toplevel_configure_box(toplevel, against_edge(box, floating_area(server, next), horizontal,
+                                                  -sign));
+}
+
+/* Hyprland's movewindow. A tile trades places with the nearest tile that way; a floating
+ * window moves to that edge of its output. From the edge, either moves on to the next output
+ * that way, if there is one. Neither ever covers another tile or grows to fill half the
+ * output. */
+static void move_window(struct sh_server *server, enum sh_action action) {
+    struct sh_toplevel *toplevel = current_toplevel(server);
+    if (!toplevel || server->locked || toplevel->fullscreen)
+        return;
+    if (server->grabbed_toplevel == toplevel)
+        reset_cursor_mode(server);
+    bool horizontal = action == SH_MOVE_LEFT || action == SH_MOVE_RIGHT;
+    int sign = action == SH_MOVE_LEFT || action == SH_MOVE_UP ? -1 : 1;
+    struct wlr_output *output = toplevel_output(toplevel);
+    if (!output)
+        return;
+    if (toplevel->tiled) {
+        struct sh_toplevel *neighbour = toplevel_toward(toplevel, horizontal, sign, true);
+        if (neighbour) {
+            move_tile(toplevel, neighbour, output, horizontal, sign);
+            pointer_follow(toplevel);
+            return;
+        }
+    } else if (!toplevel->arranged || toplevel->arrangement != SH_MAXIMIZE) {
+        unarrange_in_place(toplevel);
+        struct wlr_box box = toplevel_box(toplevel);
+        struct wlr_box moved =
+            against_edge(box, floating_area(server, output), horizontal, sign);
+        if (moved.x != box.x || moved.y != box.y) {
+            toplevel_set_position(toplevel, moved.x, moved.y);
+            pointer_follow(toplevel);
+            return;
+        }
+    }
+    static const enum wlr_direction directions[] = {WLR_DIRECTION_LEFT, WLR_DIRECTION_RIGHT,
+                                                    WLR_DIRECTION_UP, WLR_DIRECTION_DOWN};
+    struct wlr_box box = toplevel_box(toplevel);
+    struct wlr_output *next = wlr_output_layout_adjacent_output(
+        server->output_layout, directions[action - SH_MOVE_LEFT], output,
+        box.x + box.width / 2.0, box.y + box.height / 2.0);
+    if (!next)
+        return;
+    move_to_output(toplevel, next, horizontal, sign);
+    pointer_follow(toplevel);
 }
 
 /* A reload applies tiling settings that changed in the config; outputs toggled since keep
