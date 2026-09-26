@@ -337,6 +337,12 @@ ctest --test-dir build-config --output-on-failure
 See [docs/verification.md](docs/verification.md) for the actual test results and
 remaining limitations.
 
+## Branches
+
+`master` holds tested work, `develop` holds finished work waiting to be tested,
+and new work happens on `feat/*` or `fix/*` branches started from `develop`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+
 ## Development sequence
 
 1. **Done:** Lua configuration and native build foundation.
