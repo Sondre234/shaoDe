@@ -73,6 +73,8 @@
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_dialog_v1.h>
+#include <wlr/types/wlr_virtual_keyboard_v1.h>
+#include <wlr/types/wlr_virtual_pointer_v1.h>
 #include <wlr/types/wlr_xdg_foreign_registry.h>
 #include <wlr/types/wlr_xdg_foreign_v1.h>
 #include <wlr/types/wlr_xdg_foreign_v2.h>
@@ -194,6 +196,8 @@ struct sh_server {
 
     struct wlr_seat *seat;
     struct wl_listener new_input;
+    struct wl_listener new_virtual_keyboard;
+    struct wl_listener new_virtual_pointer;
     struct wl_listener request_cursor;
     struct wl_listener request_set_shape;
     uint32_t shape_edges; // edges of the client's single-edge resize shape, else 0
@@ -648,6 +652,17 @@ static void deactivate_toplevel(struct sh_server *server) {
 }
 
 /* Gives the window keyboard focus; `raise` also brings it to the front. */
+/* Gives the surface keyboard focus even while the seat has no keyboard (headless, or before a
+ * virtual keyboard connects), so the first keyboard to appear types into it. */
+static void keyboard_enter(struct wlr_seat *seat, struct wlr_surface *surface) {
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+    if (keyboard)
+        wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes,
+                                       &keyboard->modifiers);
+    else
+        wlr_seat_keyboard_notify_enter(seat, surface, NULL, 0, NULL);
+}
+
 static void focus_toplevel_raise(struct sh_toplevel *toplevel, bool raise) {
     if (!toplevel || toplevel->server->locked)
         return;
@@ -680,10 +695,8 @@ static void focus_toplevel_raise(struct sh_toplevel *toplevel, bool raise) {
         wlr_foreign_toplevel_handle_v1_set_minimized(toplevel->foreign, false);
         wlr_foreign_toplevel_handle_v1_set_activated(toplevel->foreign, true);
     }
-    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
-    if (keyboard && toplevel_accepts_keyboard(toplevel))
-        wlr_seat_keyboard_notify_enter(seat, toplevel_surface(toplevel), keyboard->keycodes,
-                                       keyboard->num_keycodes, &keyboard->modifiers);
+    if (toplevel_accepts_keyboard(toplevel))
+        keyboard_enter(seat, toplevel_surface(toplevel));
     set_active_output(server, toplevel->output);
 }
 
@@ -743,10 +756,7 @@ static void focus_layer(struct sh_layer *layer) {
     struct sh_server *server = layer->server;
     deactivate_toplevel(server);
     server->focused_layer = layer;
-    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
-    if (keyboard)
-        wlr_seat_keyboard_notify_enter(server->seat, layer->surface->surface, keyboard->keycodes,
-                                       keyboard->num_keycodes, &keyboard->modifiers);
+    keyboard_enter(server->seat, layer->surface->surface);
 }
 
 static void minimize_toplevel(struct sh_toplevel *toplevel) {
@@ -1098,7 +1108,9 @@ static void server_new_keyboard(struct sh_server *server, struct wlr_input_devic
     keyboard->server = server;
     keyboard->wlr_keyboard = wlr_keyboard;
 
-    if (!configure_keyboard(server, wlr_keyboard)) {
+    // A virtual keyboard (wtype and the like) sends its own keymap, which ours would replace.
+    bool is_virtual = wlr_input_device_get_virtual_keyboard(device) != NULL;
+    if (!is_virtual && !configure_keyboard(server, wlr_keyboard)) {
         wlr_log(WLR_ERROR, "Failed to configure keyboard");
         free(keyboard);
         return;
@@ -1108,7 +1120,9 @@ static void server_new_keyboard(struct sh_server *server, struct wlr_input_devic
     add_listener(&wlr_keyboard->events.key, &keyboard->key, keyboard_handle_key);
     add_listener(&device->events.destroy, &keyboard->destroy, keyboard_handle_destroy);
 
-    wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
+    // It becomes the seat keyboard on its first key, once its keymap has arrived.
+    if (!is_virtual)
+        wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
 
     wl_list_insert(&server->keyboards, &keyboard->link);
 }
@@ -1181,11 +1195,22 @@ static void server_new_input(struct wl_listener *listener, void *data) {
     default:
         break;
     }
+}
 
-    uint32_t caps = WL_SEAT_CAPABILITY_POINTER;
-    if (!wl_list_empty(&server->keyboards))
-        caps |= WL_SEAT_CAPABILITY_KEYBOARD;
-    wlr_seat_set_capabilities(server->seat, caps);
+/* Virtual input lets tools such as wtype and wlrctl drive the session, e.g. in tests. */
+static void server_new_virtual_keyboard(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_virtual_keyboard);
+    struct wlr_virtual_keyboard_v1 *keyboard = data;
+    server_new_input(&server->new_input, &keyboard->keyboard.base);
+}
+
+static void server_new_virtual_pointer(struct wl_listener *listener, void *data) {
+    struct sh_server *server = wl_container_of(listener, server, new_virtual_pointer);
+    struct wlr_virtual_pointer_v1_new_pointer_event *event = data;
+    struct wlr_input_device *device = &event->new_pointer->pointer.base;
+    server_new_input(&server->new_input, device);
+    if (event->suggested_output)
+        wlr_cursor_map_input_to_output(server->cursor, device, event->suggested_output);
 }
 
 static void seat_request_cursor(struct wl_listener *listener, void *data) {
@@ -2005,11 +2030,8 @@ static void lock_output_presented(struct sh_output *output) {
 static void lock_surface_map(struct wl_listener *listener, void *data) {
     struct sh_lock_surface *lock_surface = wl_container_of(listener, lock_surface, map);
     struct sh_server *server = lock_surface->server;
-    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
-    if (server->locked && keyboard && !server->seat->keyboard_state.focused_surface)
-        wlr_seat_keyboard_notify_enter(server->seat, lock_surface->surface->surface,
-                                       keyboard->keycodes, keyboard->num_keycodes,
-                                       &keyboard->modifiers);
+    if (server->locked && !server->seat->keyboard_state.focused_surface)
+        keyboard_enter(server->seat, lock_surface->surface->surface);
     process_cursor_motion(server, 0);
 }
 
@@ -2020,12 +2042,10 @@ static void lock_surface_destroy(struct wl_listener *listener, void *data) {
         wlr_seat_keyboard_clear_focus(server->seat);
         // Hand the keyboard to another lock surface, if one remains.
         struct wlr_session_lock_surface_v1 *other;
-        struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
-        if (server->lock && keyboard) {
+        if (server->lock) {
             wl_list_for_each(other, &server->lock->lock->surfaces, link) {
                 if (other != lock_surface->surface && other->surface->mapped) {
-                    wlr_seat_keyboard_notify_enter(server->seat, other->surface, keyboard->keycodes,
-                                                   keyboard->num_keycodes, &keyboard->modifiers);
+                    keyboard_enter(server->seat, other->surface);
                     break;
                 }
             }
@@ -2427,6 +2447,8 @@ static void reload_config(struct sh_server *server) {
     configure_animations(server);
     struct sh_keyboard *keyboard;
     wl_list_for_each(keyboard, &server->keyboards, link) {
+        if (wlr_input_device_get_virtual_keyboard(&keyboard->wlr_keyboard->base))
+            continue;
         if (!configure_keyboard(server, keyboard->wlr_keyboard))
             wlr_log(WLR_ERROR, "Could not apply reloaded keymap");
     }
@@ -3556,11 +3578,8 @@ static void xwayland_map(struct wl_listener *listener, void *data) {
     }
     if (toplevel->unmanaged) {
         wlr_scene_node_set_position(&toplevel->scene_tree->node, xsurface->x, xsurface->y);
-        struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
-        if (keyboard && !server->locked &&
-            wlr_xwayland_surface_override_redirect_wants_focus(xsurface))
-            wlr_seat_keyboard_notify_enter(server->seat, xsurface->surface, keyboard->keycodes,
-                                           keyboard->num_keycodes, &keyboard->modifiers);
+        if (!server->locked && wlr_xwayland_surface_override_redirect_wants_focus(xsurface))
+            keyboard_enter(server->seat, xsurface->surface);
         return;
     }
     toplevel->scene_tree->node.data = &toplevel->node;
@@ -4471,7 +4490,17 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_list_init(&server.keyboards);
     wl_list_init(&server.pointers);
     add_listener(&server.backend->events.new_input, &server.new_input, server_new_input);
+    struct wlr_virtual_keyboard_manager_v1 *virtual_keyboards =
+        wlr_virtual_keyboard_manager_v1_create(server.wl_display);
+    add_listener(&virtual_keyboards->events.new_virtual_keyboard, &server.new_virtual_keyboard,
+                 server_new_virtual_keyboard);
+    struct wlr_virtual_pointer_manager_v1 *virtual_pointers =
+        wlr_virtual_pointer_manager_v1_create(server.wl_display);
+    add_listener(&virtual_pointers->events.new_virtual_pointer, &server.new_virtual_pointer,
+                 server_new_virtual_pointer);
     server.seat = wlr_seat_create(server.wl_display, "seat0");
+    // Always offered, so clients bind a keyboard even before one (maybe virtual) appears.
+    wlr_seat_set_capabilities(server.seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
     add_listener(&server.seat->events.request_set_cursor, &server.request_cursor,
                  seat_request_cursor);
     struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr =
@@ -4575,6 +4604,8 @@ int sh_run(const struct sh_callbacks *callbacks, enum sh_backend_mode mode) {
     wl_list_remove(&server.cursor_frame.link);
 
     wl_list_remove(&server.new_input.link);
+    wl_list_remove(&server.new_virtual_keyboard.link);
+    wl_list_remove(&server.new_virtual_pointer.link);
     wl_list_remove(&server.request_cursor.link);
     wl_list_remove(&server.request_set_shape.link);
     wl_list_remove(&server.pointer_focus_change.link);
