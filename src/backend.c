@@ -2661,9 +2661,12 @@ static bool in_grid(struct sh_toplevel *toplevel, struct wlr_output *output) {
 }
 
 /* Snaps or maximizes one window within the usable area of its output. A tiled window placed
- * by hand floats from then on, or, lifted out by a drag, stays out of the tiling. */
+ * by hand floats from then on, or, lifted out by a drag, stays out of the tiling. Snapping a
+ * window again to the side it is on moves it to the near half of the next output that way. */
 static void place_by_hand(struct sh_toplevel *toplevel, enum sh_action action) {
     struct sh_server *server = toplevel->server;
+    bool again = (action == SH_SNAP_LEFT || action == SH_SNAP_RIGHT) && toplevel->arranged &&
+                 !toplevel->tiled && toplevel->arrangement == action;
     if (toplevel->tiled || wants_tiling(toplevel))
         toplevel->floating = toplevel->placed = true;
     if (toplevel->tiled)
@@ -2671,6 +2674,16 @@ static void place_by_hand(struct sh_toplevel *toplevel, enum sh_action action) {
     struct wlr_output *output = toplevel_output(toplevel);
     if (!output)
         return;
+    if (again) {
+        struct wlr_box box = toplevel_box(toplevel);
+        struct wlr_output *next = wlr_output_layout_adjacent_output(
+            server->output_layout, action == SH_SNAP_LEFT ? WLR_DIRECTION_LEFT : WLR_DIRECTION_RIGHT,
+            output, box.x + box.width / 2.0, box.y + box.height / 2.0);
+        if (next) {
+            output = next;
+            action = action == SH_SNAP_LEFT ? SH_SNAP_RIGHT : SH_SNAP_LEFT;
+        }
+    }
     const struct sh_settings *settings = server_settings(server);
     struct sh_rect area = gap_area(settings, usable_area(server, output), action), target;
     if (sh_placement(action, area, settings->gap_inner, 0, 1, &target))
