@@ -106,6 +106,9 @@ sh_screenshot_mode parse_screenshot_mode(const std::string &name);
 
 // Parse into a fresh value; callers replace the active configuration only on success.
 // A configuration's `theme = "FILE"` (relative to `directory`) supplies every setting it omits.
+// `extends = "default"` then supplies what both omit from the default configuration
+// ($SHAODE_DEFAULT_CONFIG, else the installed one); its bindings yield to the configuration's own
+// on the same keys, and a binding with action = "none" removes a default one.
 Config load_config(const std::filesystem::path &path);
 Config parse_config(const std::string &source, const std::string &name = "config",
                     const std::filesystem::path &directory = {});

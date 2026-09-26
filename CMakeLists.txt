@@ -24,6 +24,8 @@ add_library(shaode_config src/config.cpp src/layout.cpp src/tiling.cpp
 target_include_directories(shaode_config PUBLIC include)
 target_link_libraries(shaode_config PRIVATE PkgConfig::LUA PUBLIC PkgConfig::XKB)
 target_compile_options(shaode_config PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(shaode_config PRIVATE
+    SHAODE_DEFAULT_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/shaode/init.lua")
 
 include(CTest)
 if(BUILD_TESTING)

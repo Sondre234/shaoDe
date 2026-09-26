@@ -79,8 +79,8 @@ cmake --install build
 Replace `foot` with an installed Wayland terminal. Change the terminal command in
 `config/init.lua` too: the example uses Kitty. The executable uses the installed
 example configuration when no personal config exists. To customize it, create
-`~/.config/shaode/init.lua` from the example; installation never overwrites this
-personal file. For a custom location use `--config /path/to/init.lua`.
+`~/.config/shaode/init.lua` holding `extends = "default"` and your changes (see the
+README); installation never overwrites this personal file. For a custom location use `--config /path/to/init.lua`.
 
 The normal build includes `shaode-shell` alongside `shaode`. For compositor-only
 development add `-DSHAODE_BUILD_SHELL=OFF`; Qt, GIO, and LayerShellQt are then
@@ -127,7 +127,7 @@ time limit; set `SHAODE_TEST_LIMIT` to a number of seconds to quit on its own in
 case input does not work.
 `SHAODE_TEST_TERM` picks the terminal it opens (default foot).
 It asks which profile to run: a directory in `~/.config/shaode/profiles` holding an
-`init.lua` (a symlink to `config/init.lua` keeps up with the tree) and the `theme.lua`
+`init.lua` (with `extends = "default"` it layers over this tree's `config/init.lua`) and the `theme.lua`
 that `shaode import --config ~/.config/shaode/profiles/NAME/init.lua ~/.config` writes.
 Enter takes the one used last. `-p NAME` skips the question, and `-n` runs a fresh
 session from the example configuration alone, as a first install sees it.

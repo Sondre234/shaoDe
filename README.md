@@ -324,6 +324,26 @@ or `~/.config/shaode/init.lua` when `XDG_CONFIG_HOME` is unset, then falls back
 to the installed example under the configured data directory. It never creates
 or overwrites a personal configuration automatically.
 
+A personal configuration need not copy the example. With `extends = "default"` it holds
+only its changes, and the installed example (or `$SHAODE_DEFAULT_CONFIG`) supplies the
+rest, after its theme:
+
+```lua
+return {
+    version = 1,
+    extends = "default",
+    theme = "theme.lua",
+    bindings = {
+        { mods = { "Super" }, key = "e", action = "spawn", command = { "dolphin" } },
+        { mods = { "Super" }, key = "v", action = "none" }, -- drop a default binding
+    },
+}
+```
+
+Its bindings take their keys first and the defaults fill in the rest; `action = "none"`
+leaves a key unbound. Other lists, such as `startup` or `shell.launchers`, replace the
+default list whole.
+
 CTest covers configuration validation, grid and dwindle layout bounds/non-overlap,
 and a headless compositor with real xdg-shell clients. The integration tests verify
 mapping, frame callbacks, maximize/restore, unmapping, accepted/rejected reloads,
