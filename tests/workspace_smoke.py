@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix="shaode-workspace-test-") as directory:
                                   env=env, stdout=output, stderr=output)
         processes = [server]
         try:
-            wait_for(lambda: "Control socket" in log.read_text(), processes, "startup")
+            wait_for(lambda: "Running Wayland compositor" in log.read_text(), processes, "startup")
             text = log.read_text()
             env["WAYLAND_DISPLAY"] = re.search(r"WAYLAND_DISPLAY=(\S+)", text)[1]
             env["SHAODE_SOCKET"] = re.search(r"Control socket: (\S+)", text)[1]
